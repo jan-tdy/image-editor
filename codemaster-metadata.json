@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "publisher": "jan-tdy",
+  "repo": "image-editor",
+  "homepage": "https://github.com/jan-tdy/image-editor",
+  "apps": [
+    {
+      "id": "image-editor",
+      "name": "PyView Editor",
+      "tagline": "Fast PyQt6 image & video viewer/editor",
+      "description": "Browse folders of photos and videos, view and play them, rotate/flip/crop images, and adjust brightness, contrast, saturation and RGB channels live. Includes batch rename/convert/resize/adjust and an image-joining (stitching) tool.",
+      "category": "Graphics & Photo",
+      "version": "0.2.0",
+      "author": "JapySoft TDY",
+      "icon": "assets/icon.svg",
+      "subdir": ".",
+      "entrypoint": "main.py",
+      "run": "python3 main.py",
+      "requirements": "requirements.txt",
+      "update_method": "sync",
+      "maintained": true
+    }
+  ]
+}
