@@ -53,6 +53,11 @@ def apply_case(text: str, mode: str) -> str:
 
 
 def apply_find_replace(text: str, find: str, replace: str, use_regex: bool) -> str:
+    """Replace literal or regex matches.
+
+    Raises ``ValueError`` when regular-expression matching is enabled with an
+    invalid pattern.
+    """
     if not find:
         return text
     if use_regex:

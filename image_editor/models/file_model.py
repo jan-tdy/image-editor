@@ -53,12 +53,14 @@ class FolderNavigator:
         self.index: int = -1
 
     def set_folder(self, folder: str, select_path: str | None = None) -> None:
+        """Load a folder and select the requested path or its first media entry."""
         self.folder = folder
         self.entries = list_media(folder)
         if not select_path or not self.select(select_path):
             self.index = 0 if self.entries else -1
 
     def select(self, path: str) -> bool:
+        """Select a matching entry and report whether it was found."""
         path = os.path.abspath(path)
         for i, entry in enumerate(self.entries):
             if os.path.abspath(entry.path) == path:
@@ -90,6 +92,7 @@ class FolderNavigator:
         return None
 
     def refresh(self) -> None:
+        """Reload entries while retaining, or safely replacing, the selection."""
         current_path = self.current().path if self.current() else None
         if not self.folder:
             return

@@ -130,6 +130,7 @@ def _resolve_out_path(job: BatchFileJob, settings: BatchSettings) -> Path:
 
 
 def process_one(job: BatchFileJob, settings: BatchSettings) -> BatchLogEntry:
+    """Process one file, returning a log entry instead of raising file errors."""
     src = Path(job.src_path)
     if not src.exists():
         return BatchLogEntry(job.src_path, error="Source file no longer exists")

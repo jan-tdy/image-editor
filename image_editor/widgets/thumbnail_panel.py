@@ -65,6 +65,7 @@ class ThumbnailPanel(QWidget):
         self.list_widget.currentItemChanged.connect(self._on_current_changed)
 
     def load_folder(self, folder: str) -> list[MediaEntry]:
+        """Populate media entries and queue image thumbnails for background loading."""
         entries = list_media(folder)
         self.list_widget.clear()
         self._items.clear()

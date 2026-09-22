@@ -45,6 +45,7 @@ def crop(image: Image.Image, box: tuple[int, int, int, int]) -> Image.Image:
 
 
 def resize(image: Image.Image, size: tuple[int, int], keep_aspect: bool = True) -> Image.Image:
+    """Resize exactly to ``size`` or fit within it while preserving aspect ratio."""
     if keep_aspect:
         result = image.copy()
         result.thumbnail(size, Image.Resampling.LANCZOS)
@@ -104,7 +105,10 @@ def apply_adjustments(
     green: float = 0,
     blue: float = 0,
 ) -> Image.Image:
-    """Apply the full adjustment chain in one predictable order."""
+    """Apply percentage adjustments in brightness, contrast, saturation, RGB order.
+
+    Each adjustment value is clamped to the range -100 through 100.
+    """
     result = image
     result = apply_brightness(result, brightness)
     result = apply_contrast(result, contrast)
@@ -114,6 +118,7 @@ def apply_adjustments(
 
 
 def autocontrast(image: Image.Image, cutoff: float = 0.5) -> Image.Image:
+    """Apply automatic contrast while preserving an RGBA image's alpha channel."""
     if image.mode == "RGBA":
         rgb, alpha = image.convert("RGB"), image.getchannel("A")
         adjusted = ImageOps.autocontrast(rgb, cutoff=cutoff)

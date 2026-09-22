@@ -6,6 +6,7 @@ from PyQt6.QtGui import QImage, QPixmap
 
 
 def pil_to_qimage(image: Image.Image) -> QImage:
+    """Convert a Pillow image to an independent RGB or RGBA ``QImage``."""
     if image.mode not in ("RGBA", "RGB"):
         image = image.convert("RGBA" if "A" in image.mode else "RGB")
     data = image.tobytes("raw", image.mode)

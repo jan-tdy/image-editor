@@ -123,6 +123,7 @@ def compose_grid(images: list[Image.Image], options: StitchOptions) -> Image.Ima
 
 
 def compose(images: list[Image.Image], options: StitchOptions) -> Image.Image:
+    """Compose images using the selected layout, or return a 1-pixel empty canvas."""
     if not images:
         return Image.new("RGBA", (1, 1), options.background)
     if options.direction == "vertical":

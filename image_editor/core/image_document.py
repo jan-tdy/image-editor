@@ -50,6 +50,7 @@ class ImageDocument:
 
     # -- loading / saving -------------------------------------------------
     def load(self, path: str) -> None:
+        """Load an image with EXIF orientation applied and reset all edit state."""
         image = image_ops.load_with_orientation(path)
         if image.mode not in ("RGB", "RGBA"):
             image = image.convert("RGBA" if "transparency" in image.info or image.mode in ("P", "LA") else "RGB")
@@ -63,6 +64,11 @@ class ImageDocument:
         self.dirty = False
 
     def save(self, path: str | None = None, quality: int = 95) -> str:
+        """Bake pending adjustments, save the image, and mark the document clean.
+
+        Raises ``RuntimeError`` if no image is loaded and ``ValueError`` if no
+        destination is available. Returns the destination path.
+        """
         if self.base_image is None:
             raise RuntimeError("No image loaded")
         target = path or self.path
@@ -91,6 +97,10 @@ class ImageDocument:
 
     # -- preview ------------------------------------------------------------
     def preview_image(self) -> Image.Image:
+        """Return the baked image with live adjustments applied.
+
+        Raises ``RuntimeError`` if no image is loaded.
+        """
         if self.base_image is None:
             raise RuntimeError("No image loaded")
         if self.adjustments.is_identity():
@@ -116,16 +126,18 @@ class ImageDocument:
 
     # -- adjustments (non-destructive, live) --------------------------------
     def set_adjustments(self, **kwargs) -> None:
+        """Update named live adjustments and mark the document as modified."""
         self.adjustments = replace(self.adjustments, **kwargs)
         self._invalidate_preview()
         self.dirty = True
 
     def reset_adjustments(self) -> None:
+        """Clear live adjustments without changing the baked image."""
         self.adjustments = Adjustments()
         self._invalidate_preview()
 
     def commit_adjustments(self) -> bool:
-        """Bake current adjustment values into base_image as an undo step."""
+        """Bake live adjustments as an undo step and report whether any were set."""
         if self.adjustments.is_identity():
             return False
         self._push_undo()
@@ -175,6 +187,7 @@ class ImageDocument:
         return bool(self._redo_stack)
 
     def undo(self) -> bool:
+        """Restore the previous baked image and report whether one existed."""
         if not self._undo_stack or self.base_image is None:
             return False
         self._redo_stack.append(self.base_image.copy())
@@ -185,6 +198,7 @@ class ImageDocument:
         return True
 
     def redo(self) -> bool:
+        """Restore the next baked image and report whether one existed."""
         if not self._redo_stack or self.base_image is None:
             return False
         self._undo_stack.append(self.base_image.copy())
@@ -195,6 +209,7 @@ class ImageDocument:
         return True
 
     def revert_to_original(self) -> None:
+        """Restore the originally loaded image as an undoable edit, if present."""
         if self.original is None:
             return
         self._push_undo()
