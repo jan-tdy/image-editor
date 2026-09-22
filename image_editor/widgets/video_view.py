@@ -7,7 +7,7 @@ video support instead of crashing.
 """
 from __future__ import annotations
 
-from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtCore import QUrl, Qt, pyqtSignal
 from PyQt6.QtWidgets import (
     QHBoxLayout,
     QLabel,
@@ -86,15 +86,15 @@ if MULTIMEDIA_AVAILABLE:
             )
 
         def load(self, path: str, autoplay: bool = True) -> None:
-            from PyQt6.QtCore import QUrl
-
             self.player.setSource(QUrl.fromLocalFile(path))
             if autoplay:
                 self.player.play()
 
         def stop_and_release(self) -> None:
             self.player.stop()
-            self.player.setSource(None)  # type: ignore[arg-type]
+            # setSource() takes a QUrl, not None - a null QUrl is Qt's own
+            # way to discard the current source and release its I/O.
+            self.player.setSource(QUrl())
 
         def toggle_play(self) -> None:
             if self.player.playbackState() == QMediaPlayer.PlaybackState.PlayingState:

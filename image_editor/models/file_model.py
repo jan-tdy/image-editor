@@ -55,9 +55,7 @@ class FolderNavigator:
     def set_folder(self, folder: str, select_path: str | None = None) -> None:
         self.folder = folder
         self.entries = list_media(folder)
-        if select_path:
-            self.select(select_path)
-        else:
+        if not select_path or not self.select(select_path):
             self.index = 0 if self.entries else -1
 
     def select(self, path: str) -> bool:
@@ -93,7 +91,15 @@ class FolderNavigator:
 
     def refresh(self) -> None:
         current_path = self.current().path if self.current() else None
-        if self.folder:
-            self.entries = list_media(self.folder)
-            if current_path:
-                self.select(current_path)
+        if not self.folder:
+            return
+        self.entries = list_media(self.folder)
+        if current_path and self.select(current_path):
+            return
+        # The previously current file is gone (renamed/deleted elsewhere):
+        # clamp to the nearest remaining entry instead of leaving a stale
+        # or out-of-range index.
+        if self.entries:
+            self.index = min(max(self.index, 0), len(self.entries) - 1)
+        else:
+            self.index = -1

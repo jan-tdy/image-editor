@@ -367,6 +367,8 @@ class MainWindow(QMainWindow):
             self.open_folder(folder)
 
     def open_folder(self, folder: str, select_path: str | None = None) -> None:
+        if not self._confirm_discard_if_dirty():
+            return
         self.navigator.set_folder(folder, select_path=select_path)
         self.thumbnail_panel.load_folder(folder)
         self.settings.setValue("last_folder", folder)
@@ -378,6 +380,8 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage("No images or videos found in this folder", 4000)
 
     def open_media(self, path: str, sync_thumbnail: bool = True) -> None:
+        if not self._confirm_discard_if_dirty():
+            return
         ext = Path(path).suffix.lower()
         try:
             if ext in VIDEO_EXTENSIONS:
@@ -413,6 +417,8 @@ class MainWindow(QMainWindow):
         self._update_status(path, is_video=True)
 
     def _clear_view(self) -> None:
+        if self.is_video:
+            self.video_view.stop_and_release()
         self.document = None
         self.is_video = False
         self.image_view.clear()
@@ -460,6 +466,36 @@ class MainWindow(QMainWindow):
     def _guard_image(self) -> bool:
         if self.document is None or self.is_video:
             return False
+        return True
+
+    def _confirm_discard_if_dirty(self) -> bool:
+        """Ask before an in-memory edit is about to be replaced/discarded.
+        Returns False if the caller should abort (user cancelled, or a
+        chosen Save failed)."""
+        if self.document is None or not self.document.dirty:
+            return True
+        name = Path(self.document.path).name if self.document.path else "this image"
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Icon.Warning)
+        box.setWindowTitle("Unsaved Changes")
+        box.setText(f'"{name}" has unsaved changes.')
+        box.setStandardButtons(
+            QMessageBox.StandardButton.Save
+            | QMessageBox.StandardButton.Discard
+            | QMessageBox.StandardButton.Cancel
+        )
+        box.setDefaultButton(QMessageBox.StandardButton.Save)
+        choice = box.exec()
+        if choice == QMessageBox.StandardButton.Cancel:
+            return False
+        if choice == QMessageBox.StandardButton.Save:
+            try:
+                self.document.save()
+            except Exception as exc:  # noqa: BLE001
+                QMessageBox.critical(self, "Save failed", str(exc))
+                return False
+        else:  # Discard
+            self.document.dirty = False
         return True
 
     def undo(self) -> None:
@@ -552,11 +588,19 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------
     # File operations
     # ------------------------------------------------------------------
+    def _sync_adjustments_panel_after_save(self) -> None:
+        # ImageDocument.save() bakes any live adjustments into base_image,
+        # so the sliders must drop back to 0 too - otherwise the next drag
+        # would apply on top of an already-baked edit while reading a stale,
+        # smaller-looking value.
+        self.adjustments_panel.set_values(brightness=0, contrast=0, saturation=0, red=0, green=0, blue=0)
+
     def save_current(self) -> None:
         if not self._guard_image():
             return
         try:
             self.document.save()
+            self._sync_adjustments_panel_after_save()
             self.statusBar().showMessage(f"Saved {self.document.path}", 3000)
         except Exception as exc:  # noqa: BLE001
             QMessageBox.critical(self, "Save failed", str(exc))
@@ -570,10 +614,14 @@ class MainWindow(QMainWindow):
             return
         try:
             self.document.save(path)
+            self._sync_adjustments_panel_after_save()
             self.statusBar().showMessage(f"Saved {path}", 3000)
             self.navigator.refresh()
+            self.navigator.select(path)
+            self._suspend_thumb_sync = True
             self.thumbnail_panel.load_folder(self.navigator.folder)
             self.thumbnail_panel.select_path(path)
+            self._suspend_thumb_sync = False
             self._update_status(path)
         except Exception as exc:  # noqa: BLE001
             QMessageBox.critical(self, "Save failed", str(exc))
@@ -591,11 +639,21 @@ class MainWindow(QMainWindow):
         entry = self.navigator.current()
         if entry is None:
             return
+        if not self._confirm_discard_if_dirty():
+            return
         old_path = Path(entry.path)
         new_name, ok = QInputDialog.getText(self, "Rename File", "New name:", text=old_path.stem)
         if not ok or not new_name.strip():
             return
-        new_path = old_path.with_name(new_name.strip() + old_path.suffix)
+        new_name = new_name.strip()
+        if os.sep in new_name or (os.altsep and os.altsep in new_name):
+            QMessageBox.warning(self, "Rename failed", "The file name cannot contain a path separator.")
+            return
+        try:
+            new_path = old_path.with_name(new_name + old_path.suffix)
+        except ValueError as exc:
+            QMessageBox.warning(self, "Rename failed", str(exc))
+            return
         if new_path.exists():
             QMessageBox.warning(self, "Rename failed", f"{new_path.name} already exists.")
             return
@@ -613,6 +671,8 @@ class MainWindow(QMainWindow):
     def delete_current(self) -> None:
         entry = self.navigator.current()
         if entry is None:
+            return
+        if not self._confirm_discard_if_dirty():
             return
         verb = "move to the trash" if send2trash else "permanently delete"
         if QMessageBox.question(
@@ -767,6 +827,9 @@ class MainWindow(QMainWindow):
             self.open_folder(str(Path(local_path).parent), select_path=local_path)
 
     def closeEvent(self, event) -> None:
+        if not self._confirm_discard_if_dirty():
+            event.ignore()
+            return
         self.slideshow_timer.stop()
         self.settings.setValue("last_folder", self.navigator.folder or "")
         super().closeEvent(event)

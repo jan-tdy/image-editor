@@ -68,6 +68,13 @@ class ImageDocument:
         target = path or self.path
         if not target:
             raise ValueError("No destination path given")
+        # Bake any live (uncommitted) adjustments into base_image first, so
+        # the in-memory state matches exactly what's written to disk. Saving
+        # preview_image() without this leaves base_image stale: resetting
+        # adjustments afterwards (e.g. closing the panel) would silently
+        # diverge the displayed image from the saved file while `dirty`
+        # still read False.
+        self.commit_adjustments()
         image = self.preview_image()
         ext = Path(target).suffix.lower()
         save_kwargs = {}

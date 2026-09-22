@@ -2,10 +2,10 @@
 from __future__ import annotations
 
 from PyQt6.QtCore import QFileInfo, QObject, QRunnable, QSize, Qt, QThreadPool, pyqtSignal
-from PyQt6.QtGui import QIcon, QPixmap
+from PyQt6.QtGui import QIcon, QImage, QPixmap
 from PyQt6.QtWidgets import QFileIconProvider, QListWidget, QListWidgetItem, QVBoxLayout, QWidget
 
-from ..core.convert import make_thumbnail_pixmap
+from ..core.convert import make_thumbnail_qimage
 from ..core.image_ops import load_with_orientation
 from ..models.file_model import MediaEntry, list_media
 
@@ -13,7 +13,7 @@ THUMB_SIZE = 96
 
 
 class _ThumbnailSignals(QObject):
-    ready = pyqtSignal(str, QPixmap)
+    ready = pyqtSignal(str, QImage)
 
 
 class _ThumbnailWorker(QRunnable):
@@ -23,12 +23,15 @@ class _ThumbnailWorker(QRunnable):
         self.signals = _ThumbnailSignals()
 
     def run(self) -> None:
+        # Only QImage is built here: QPixmap is a GUI class that Qt requires
+        # to be constructed on the main thread, and this runs in a
+        # QThreadPool worker thread.
         try:
             image = load_with_orientation(self.path)
-            pixmap = make_thumbnail_pixmap(image, THUMB_SIZE)
+            qimage = make_thumbnail_qimage(image, THUMB_SIZE)
         except Exception:
             return
-        self.signals.ready.emit(self.path, pixmap)
+        self.signals.ready.emit(self.path, qimage)
 
 
 class ThumbnailPanel(QWidget):
@@ -87,10 +90,10 @@ class ThumbnailPanel(QWidget):
         worker.signals.ready.connect(self._on_thumbnail_ready)
         self._pool.start(worker)
 
-    def _on_thumbnail_ready(self, path: str, pixmap: QPixmap) -> None:
+    def _on_thumbnail_ready(self, path: str, qimage: QImage) -> None:
         item = self._items.get(path)
         if item is not None:
-            item.setIcon(QIcon(pixmap))
+            item.setIcon(QIcon(QPixmap.fromImage(qimage)))
 
     def select_path(self, path: str) -> None:
         item = self._items.get(path)
