@@ -25,6 +25,8 @@ from PyQt6.QtWidgets import (
 from .constants import APP_NAME, APP_ORG, IMAGE_EXTENSIONS, VIDEO_EXTENSIONS
 from .core.convert import pil_to_qpixmap
 from .core.image_document import ImageDocument
+from .dialogs.batch_dialog import BatchDialog
+from .dialogs.stitch_dialog import StitchDialog
 from .models.file_model import FolderNavigator
 from .widgets.adjustments_panel import AdjustmentsPanel
 from .widgets.image_view import ImageView
@@ -233,6 +235,14 @@ class MainWindow(QMainWindow):
         self.act_next.setShortcut("Right")
         self.act_next.triggered.connect(self.go_next)
 
+        self.act_batch = QAction("Batch Rename && Edit...", self)
+        self.act_batch.setShortcut("Ctrl+B")
+        self.act_batch.triggered.connect(self.open_batch_dialog)
+
+        self.act_stitch = QAction("Join Images...", self)
+        self.act_stitch.setShortcut("Ctrl+J")
+        self.act_stitch.triggered.connect(self.open_stitch_dialog)
+
         self.act_about = QAction("About", self)
         self.act_about.triggered.connect(self.show_about)
 
@@ -292,6 +302,10 @@ class MainWindow(QMainWindow):
         nav_menu.addAction(self.act_prev)
         nav_menu.addAction(self.act_next)
 
+        tools_menu = menubar.addMenu("&Tools")
+        tools_menu.addAction(self.act_batch)
+        tools_menu.addAction(self.act_stitch)
+
         help_menu = menubar.addMenu("&Help")
         help_menu.addAction(self.act_about)
 
@@ -324,6 +338,9 @@ class MainWindow(QMainWindow):
         toolbar.addAction(self.act_adjustments)
         toolbar.addAction(self.act_slideshow)
         toolbar.addAction(self.act_fullscreen)
+        toolbar.addSeparator()
+        toolbar.addAction(self.act_batch)
+        toolbar.addAction(self.act_stitch)
 
     def _build_statusbar(self) -> None:
         bar = QStatusBar()
@@ -686,6 +703,42 @@ class MainWindow(QMainWindow):
         self.act_prev.setEnabled(self.navigator.has_prev())
         self.act_next.setEnabled(self.navigator.has_next())
 
+    # ------------------------------------------------------------------
+    # Tools: batch editing / image joining
+    # ------------------------------------------------------------------
+    def open_batch_dialog(self) -> None:
+        initial_paths = [e.path for e in self.navigator.entries] if self.navigator.entries else None
+        dialog = BatchDialog(self, initial_paths=initial_paths)
+        dialog.exec()
+        self._reload_after_external_change()
+
+    def open_stitch_dialog(self) -> None:
+        initial_paths = [
+            e.path for e in self.navigator.entries if Path(e.path).suffix.lower() in IMAGE_EXTENSIONS
+        ] if self.navigator.entries else None
+        dialog = StitchDialog(self, initial_paths=initial_paths)
+        dialog.exec()
+        self._reload_after_external_change()
+
+    def _reload_after_external_change(self) -> None:
+        """Batch operations can rename/move/delete files outside our control;
+        resync the navigator, thumbnails and the currently open document."""
+        if not self.navigator.folder:
+            return
+        current_path = self.document.path if self.document else (
+            self.navigator.current().path if self.navigator.current() else None
+        )
+        self.navigator.refresh()
+        self.thumbnail_panel.load_folder(self.navigator.folder)
+        if current_path and os.path.exists(current_path):
+            self.open_media(current_path, sync_thumbnail=True)
+        else:
+            entry = self.navigator.current()
+            if entry:
+                self.open_media(entry.path, sync_thumbnail=True)
+            else:
+                self._clear_view()
+
     def show_about(self) -> None:
         QMessageBox.about(
             self,
@@ -693,7 +746,9 @@ class MainWindow(QMainWindow):
             f"<h3>{APP_NAME}</h3>"
             "<p>A fast PyQt6 image &amp; video viewer/editor.</p>"
             "<p>Browse folders, view images and videos, rotate/flip/crop, "
-            "and adjust brightness, contrast, saturation and RGB channels.</p>",
+            "and adjust brightness, contrast, saturation and RGB channels. "
+            "Batch rename/convert/resize/adjust and an image-joining tool "
+            "are available under Tools.</p>",
         )
 
     # -- drag & drop -----------------------------------------------------------

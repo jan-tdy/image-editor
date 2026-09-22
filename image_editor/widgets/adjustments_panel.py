@@ -16,7 +16,7 @@ from PyQt6.QtWidgets import (
 SLIDER_RANGE = (-100, 100)
 
 
-class _AdjustSlider(QWidget):
+class AdjustSlider(QWidget):
     valueChanged = pyqtSignal(float)
 
     def __init__(self, label: str, parent=None):
@@ -73,7 +73,7 @@ class AdjustmentsPanel(QWidget):
 
         form = QFormLayout()
         form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
-        self.sliders: dict[str, _AdjustSlider] = {}
+        self.sliders: dict[str, AdjustSlider] = {}
         for key, label in (
             ("brightness", "Brightness"),
             ("contrast", "Contrast"),
@@ -82,7 +82,7 @@ class AdjustmentsPanel(QWidget):
             ("green", "Green"),
             ("blue", "Blue"),
         ):
-            slider = _AdjustSlider(label)
+            slider = AdjustSlider(label)
             slider.valueChanged.connect(lambda v, k=key: self.adjustmentChanged.emit(k, v))
             self.sliders[key] = slider
             layout.addWidget(slider)
