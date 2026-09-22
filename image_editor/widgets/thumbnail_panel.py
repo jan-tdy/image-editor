@@ -31,7 +31,13 @@ class _ThumbnailWorker(QRunnable):
             qimage = make_thumbnail_qimage(image, THUMB_SIZE)
         except Exception:
             return
-        self.signals.ready.emit(self.path, qimage)
+        try:
+            self.signals.ready.emit(self.path, qimage)
+        except RuntimeError:
+            # The panel (and this worker's signals object) was already torn
+            # down - e.g. the app quit while a background load was still in
+            # flight. Nothing left to deliver the thumbnail to.
+            pass
 
 
 class ThumbnailPanel(QWidget):
