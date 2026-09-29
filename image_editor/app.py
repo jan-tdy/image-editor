@@ -292,6 +292,35 @@ class MainWindow(QMainWindow):
         painter.end()
         return QIcon(pixmap)
 
+    def _auto_adjust_icon(self) -> QIcon:
+        """A small magic-wand-with-sparkles glyph for the one-click Auto
+        Adjust action, so it reads as "automatic" rather than blending into
+        the manual crop/rotate/adjustments cluster next to it."""
+        size = 22
+        pixmap = QPixmap(size, size)
+        pixmap.fill(Qt.GlobalColor.transparent)
+        painter = QPainter(pixmap)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        color = self.palette().color(self.foregroundRole())
+
+        pen = QPen(color, 2.0)
+        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+        painter.setPen(pen)
+        painter.drawLine(QPointF(4, 18), QPointF(13, 9))
+
+        def sparkle(cx: float, cy: float, r: float, width: float) -> None:
+            pen = QPen(color, width)
+            pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+            painter.setPen(pen)
+            painter.drawLine(QPointF(cx - r, cy), QPointF(cx + r, cy))
+            painter.drawLine(QPointF(cx, cy - r), QPointF(cx, cy + r))
+
+        sparkle(16.5, 6, 3.4, 1.5)
+        sparkle(20, 13, 1.7, 1.2)
+        sparkle(6, 4.5, 1.7, 1.2)
+        painter.end()
+        return QIcon(pixmap)
+
     def _build_actions(self) -> None:
         style = QStyle.StandardPixmap
 
@@ -369,6 +398,10 @@ class MainWindow(QMainWindow):
         self.act_adjustments.setShortcut("Ctrl+U")
         self.act_adjustments.setCheckable(True)
         self.act_adjustments.triggered.connect(self.toggle_adjustments)
+
+        self.act_auto_adjust = QAction(self._auto_adjust_icon(), "Auto Adjust", self)
+        self.act_auto_adjust.setShortcut("Ctrl+Shift+A")
+        self.act_auto_adjust.triggered.connect(self.auto_adjust)
 
         self.act_zoom_in = QAction(self._zoom_icon(zoom_in=True), "Zoom In", self)
         self.act_zoom_in.setShortcut(QKeySequence.StandardKey.ZoomIn)
@@ -451,6 +484,7 @@ class MainWindow(QMainWindow):
         edit_menu.addAction(self.act_crop_cancel)
         edit_menu.addSeparator()
         edit_menu.addAction(self.act_adjustments)
+        edit_menu.addAction(self.act_auto_adjust)
 
         view_menu = menubar.addMenu("&View")
         view_menu.addAction(self.act_zoom_in)
@@ -508,6 +542,7 @@ class MainWindow(QMainWindow):
             toolbar.addAction(action)
         toolbar.addSeparator()
         toolbar.addAction(self.act_adjustments)
+        toolbar.addAction(self.act_auto_adjust)
         toolbar.addAction(self.act_slideshow)
         toolbar.addAction(self.act_fullscreen)
         toolbar.addSeparator()
@@ -554,15 +589,27 @@ class MainWindow(QMainWindow):
     def open_media(self, path: str, sync_thumbnail: bool = True) -> None:
         if not self._confirm_discard_if_dirty():
             return
-        ext = Path(path).suffix.lower()
+        # Decoding a large photo below happens synchronously on this thread
+        # and can take a real, visible moment - worst case, right at startup
+        # for whatever image was last open. Without this, the window (and
+        # its first image on startup) just sits there giving no sign it's
+        # doing anything, which reads as "the app is frozen/slow to start".
+        self.statusBar().showMessage(f"Opening {Path(path).name}...")
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        QApplication.processEvents()
         try:
-            if ext in VIDEO_EXTENSIONS:
-                self._open_video(path)
-            else:
-                self._open_image(path)
-        except Exception as exc:  # noqa: BLE001 - surfaced to the user
-            QMessageBox.warning(self, "Could not open file", f"{path}\n\n{exc}")
-            return
+            ext = Path(path).suffix.lower()
+            try:
+                if ext in VIDEO_EXTENSIONS:
+                    self._open_video(path)
+                else:
+                    self._open_image(path)
+            except Exception as exc:  # noqa: BLE001 - surfaced to the user
+                QMessageBox.warning(self, "Could not open file", f"{path}\n\n{exc}")
+                return
+        finally:
+            QApplication.restoreOverrideCursor()
+            self.statusBar().clearMessage()
 
         self.navigator.select(path)
         if sync_thumbnail:
@@ -694,6 +741,12 @@ class MainWindow(QMainWindow):
         if not self._guard_image():
             return
         self.document.flip_vertical()
+        self.refresh_view()
+
+    def auto_adjust(self) -> None:
+        if not self._guard_image():
+            return
+        self.document.auto_adjust()
         self.refresh_view()
 
     def toggle_crop(self, checked: bool) -> None:
@@ -927,6 +980,7 @@ class MainWindow(QMainWindow):
             self.act_save, self.act_save_as, self.act_revert,
             self.act_rotate_left, self.act_rotate_right,
             self.act_flip_h, self.act_flip_v, self.act_crop, self.act_adjustments,
+            self.act_auto_adjust,
         ):
             action.setEnabled(has_image)
         self.act_undo.setEnabled(has_image and self.document.can_undo())
