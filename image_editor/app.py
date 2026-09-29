@@ -52,6 +52,16 @@ QToolButton, QPushButton {
     border-radius: 4px;
     padding: 4px;
 }
+QToolBar QToolButton {
+    /* Several toolbar actions (Rotate, Flip, Crop, Adjustments, Slideshow,
+       Fullscreen, Batch, Join) have no icon, only text, so Qt sized them
+       shorter than their icon-only neighbors. That left uneven vertical
+       hit-zones across the same toolbar row - clicking near the top/bottom
+       of a text button, at a height that lands fine on an icon button right
+       next to it, missed. Force every toolbar button to the icon buttons'
+       height so the whole row is a uniform, predictable target. */
+    min-height: 22px;
+}
 QToolButton:hover, QPushButton:hover {
     background-color: palette(midlight);
     border: 1px solid palette(mid);
@@ -80,7 +90,6 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle(APP_NAME)
-        self.resize(1280, 820)
         self.setAcceptDrops(True)
 
         self.settings = QSettings(APP_ORG, APP_NAME)
@@ -109,9 +118,12 @@ class MainWindow(QMainWindow):
         self._build_statusbar()
         self._update_actions_enabled()
 
-        last_folder = self.settings.value("last_folder", "", str)
-        if last_folder and os.path.isdir(last_folder):
-            self.open_folder(last_folder)
+        # restoreGeometry() also reapplies a maximized/fullscreen state, so
+        # this is what makes the window reliably reopen the way it was left
+        # instead of always landing back at a fixed size.
+        geometry = self.settings.value("window_geometry")
+        if not (geometry and self.restoreGeometry(geometry)):
+            self.resize(1280, 820)
 
     # ------------------------------------------------------------------
     # UI construction
@@ -875,6 +887,7 @@ class MainWindow(QMainWindow):
             return
         self.slideshow_timer.stop()
         self.settings.setValue("last_folder", self.navigator.folder or "")
+        self.settings.setValue("window_geometry", self.saveGeometry())
         super().closeEvent(event)
 
 
@@ -889,12 +902,24 @@ def main() -> int:
     # Opened via `pyview-editor <file>` / the desktop launcher's %f, e.g.
     # when set as the system default handler for an image type.
     args = [a for a in app.arguments()[1:] if not a.startswith("-")]
-    if args:
-        target = Path(args[0])
-        if target.is_dir():
-            window.open_folder(str(target))
-        elif target.is_file():
-            window.open_folder(str(target.parent), select_path=str(target))
+
+    def _open_initial() -> None:
+        # Deferred until the window is already on screen: decoding the first
+        # image and scanning the folder for thumbnails happens on the main
+        # thread, and doing it before show() made the window itself feel
+        # slow to appear - now it pops up immediately and fills in right after.
+        if args:
+            target = Path(args[0])
+            if target.is_dir():
+                window.open_folder(str(target))
+            elif target.is_file():
+                window.open_folder(str(target.parent), select_path=str(target))
+        else:
+            last_folder = window.settings.value("last_folder", "", str)
+            if last_folder and os.path.isdir(last_folder):
+                window.open_folder(last_folder)
+
+    QTimer.singleShot(0, _open_initial)
 
     return app.exec()
 
