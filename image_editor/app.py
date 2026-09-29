@@ -898,6 +898,11 @@ def main() -> int:
     app.setStyleSheet(APP_STYLESHEET)
     window = MainWindow()
     window.show()
+    # show() alone only maps the window - plenty of window managers won't
+    # also raise and focus it, so it can appear stacked behind whatever
+    # window already had focus. raise_()/activateWindow() force it to front.
+    window.raise_()
+    window.activateWindow()
 
     # Opened via `pyview-editor <file>` / the desktop launcher's %f, e.g.
     # when set as the system default handler for an image type.
