@@ -41,6 +41,40 @@ except Exception:  # pragma: no cover - optional dependency
 SAVE_FILTERS = "JPEG (*.jpg *.jpeg);;PNG (*.png);;BMP (*.bmp);;TIFF (*.tiff);;WEBP (*.webp)"
 SLIDESHOW_INTERVALS = {"2 seconds": 2, "3 seconds": 3, "5 seconds": 5, "10 seconds": 10}
 
+# The app previously carried no stylesheet at all, so toolbar buttons,
+# dialog buttons and the thumbnail strip gave no visual feedback on hover or
+# click - clicking a hair off a small icon looked exactly like clicking
+# nothing. `palette()` roles keep this adaptive to the user's light/dark
+# theme instead of hardcoding colors.
+APP_STYLESHEET = """
+QToolButton, QPushButton {
+    border: 1px solid transparent;
+    border-radius: 4px;
+    padding: 4px;
+}
+QToolButton:hover, QPushButton:hover {
+    background-color: palette(midlight);
+    border: 1px solid palette(mid);
+}
+QToolButton:pressed, QPushButton:pressed {
+    background-color: palette(mid);
+}
+QToolButton:checked {
+    background-color: palette(highlight);
+    border: 1px solid palette(highlight);
+}
+QListWidget::item {
+    border-radius: 4px;
+}
+QListWidget::item:hover {
+    background-color: palette(midlight);
+}
+QListWidget::item:selected {
+    background-color: palette(highlight);
+    color: palette(highlighted-text);
+}
+"""
+
 
 class MainWindow(QMainWindow):
     def __init__(self):
@@ -58,6 +92,14 @@ class MainWindow(QMainWindow):
         self.slideshow_timer = QTimer(self)
         self.slideshow_timer.timeout.connect(self._slideshow_step)
         self.slideshow_interval_s = 3
+
+        # Adjustment sliders emit valueChanged continuously while dragging,
+        # each of which redoes the full-resolution PIL pass; recomputing on
+        # every tick makes dragging visibly lag on large photos. Coalesce
+        # bursts into one refresh roughly every frame instead.
+        self._adjust_refresh_timer = QTimer(self)
+        self._adjust_refresh_timer.setSingleShot(True)
+        self._adjust_refresh_timer.timeout.connect(self.refresh_view)
 
         self._build_central_widgets()
         self._build_docks()
@@ -566,7 +608,8 @@ class MainWindow(QMainWindow):
         if not self._guard_image():
             return
         self.document.set_adjustments(**{name: value})
-        self.refresh_view()
+        if not self._adjust_refresh_timer.isActive():
+            self._adjust_refresh_timer.start(16)
 
     def _on_adjustments_apply(self) -> None:
         if not self._guard_image():
@@ -839,6 +882,7 @@ def main() -> int:
     app = QApplication(sys.argv)
     app.setApplicationName(APP_NAME)
     app.setOrganizationName(APP_ORG)
+    app.setStyleSheet(APP_STYLESHEET)
     window = MainWindow()
     window.show()
 

@@ -1,9 +1,10 @@
 """Zoom/pan image viewer with an interactive crop-rectangle tool."""
 from __future__ import annotations
 
-from PyQt6.QtCore import QPointF, QRectF, Qt, pyqtSignal
+from PyQt6.QtCore import QPoint, QPointF, QRectF, Qt, pyqtSignal
 from PyQt6.QtGui import QBrush, QColor, QPainter, QPen, QPixmap
 from PyQt6.QtWidgets import (
+    QGraphicsItem,
     QGraphicsPixmapItem,
     QGraphicsRectItem,
     QGraphicsScene,
@@ -13,6 +14,7 @@ from PyQt6.QtWidgets import (
 from ..constants import ZOOM_MAX, ZOOM_MIN, ZOOM_STEP
 
 HANDLE_SIZE = 10
+HANDLE_HIT_MARGIN = 6  # extra on-screen pixels of grab tolerance around each handle
 HANDLES = ("tl", "t", "tr", "l", "r", "bl", "b", "br")
 
 
@@ -169,12 +171,18 @@ class ImageView(QGraphicsView):
             pen = QPen(QColor(255, 255, 255), 1.5, Qt.PenStyle.DashLine)
             self._crop_rect_item = self._scene.addRect(rect, pen, QBrush(QColor(0, 0, 0, 0)))
             self._crop_rect_item.setZValue(10)
+            half = HANDLE_SIZE / 2
             for name in HANDLES:
                 handle = self._scene.addRect(
-                    0, 0, HANDLE_SIZE, HANDLE_SIZE,
+                    -half, -half, HANDLE_SIZE, HANDLE_SIZE,
                     QPen(QColor(30, 30, 30)), QBrush(QColor(255, 255, 255)),
                 )
                 handle.setZValue(11)
+                # Keep the handle a constant on-screen size regardless of the
+                # view's zoom - without this, handles shrink along with the
+                # image at fit-to-window zoom on large photos and become a
+                # couple of device pixels wide, effectively unclickable.
+                handle.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIgnoresTransformations, True)
                 self._crop_handles[name] = handle
         else:
             self._crop_rect_item.setRect(rect)
@@ -182,7 +190,6 @@ class ImageView(QGraphicsView):
         self.cropRectChanged.emit(rect)
 
     def _position_handles(self, rect: QRectF) -> None:
-        half = HANDLE_SIZE / 2
         positions = {
             "tl": rect.topLeft(), "t": QPointF(rect.center().x(), rect.top()),
             "tr": rect.topRight(), "l": QPointF(rect.left(), rect.center().y()),
@@ -192,11 +199,20 @@ class ImageView(QGraphicsView):
         for name, pos in positions.items():
             handle = self._crop_handles.get(name)
             if handle:
-                handle.setPos(pos.x() - half, pos.y() - half)
+                handle.setPos(pos)
 
-    def _handle_at(self, scene_pos: QPointF) -> str | None:
+    def _handle_at(self, view_pos: QPoint) -> str | None:
+        # Hit-test in viewport (device-pixel) space so the grab tolerance
+        # stays constant on screen no matter how far the image is zoomed -
+        # matching the handles' own constant on-screen size (see
+        # ItemIgnoresTransformations above).
+        tolerance = HANDLE_SIZE / 2 + HANDLE_HIT_MARGIN
         for name, handle in self._crop_handles.items():
-            if handle.sceneBoundingRect().adjusted(-4, -4, 4, 4).contains(scene_pos):
+            anchor = self.mapFromScene(handle.pos())
+            if (
+                abs(anchor.x() - view_pos.x()) <= tolerance
+                and abs(anchor.y() - view_pos.y()) <= tolerance
+            ):
                 return name
         return None
 
@@ -205,7 +221,7 @@ class ImageView(QGraphicsView):
         if not self.crop_mode or self._pixmap_item is None:
             return super().mousePressEvent(event)
         pos = self.mapToScene(event.pos())
-        handle = self._handle_at(pos)
+        handle = self._handle_at(event.pos())
         rect = self.current_crop_rect()
         if handle:
             self._drag_mode = handle
