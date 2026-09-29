@@ -107,6 +107,7 @@ class MainWindow(QMainWindow):
         self.document: ImageDocument | None = None
         self.is_video = False
         self._suspend_thumb_sync = False
+        self._opening_media = False
 
         self.slideshow_timer = QTimer(self)
         self.slideshow_timer.timeout.connect(self._slideshow_step)
@@ -118,7 +119,11 @@ class MainWindow(QMainWindow):
         # bursts into one refresh roughly every frame instead.
         self._adjust_refresh_timer = QTimer(self)
         self._adjust_refresh_timer.setSingleShot(True)
-        self._adjust_refresh_timer.timeout.connect(self.refresh_view)
+        # recenter=False: this refresh is a live preview of the same image
+        # (brightness/contrast/... while dragging), not a new photo, so the
+        # view shouldn't hop back to center on every tick - that would undo
+        # any panning the user did to check a specific part of the image.
+        self._adjust_refresh_timer.timeout.connect(lambda: self.refresh_view(recenter=False))
 
         self._build_central_widgets()
         self._build_docks()
@@ -587,8 +592,16 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage("No images or videos found in this folder", 4000)
 
     def open_media(self, path: str, sync_thumbnail: bool = True) -> None:
+        if self._opening_media:
+            # processEvents() below can pump a pending slideshow timer tick,
+            # which calls back into open_media() while this call is still
+            # decoding - without this guard the reentrant call's result gets
+            # clobbered when the outer call resumes and finishes opening its
+            # now-stale path, silently reverting the navigation.
+            return
         if not self._confirm_discard_if_dirty():
             return
+        self._opening_media = True
         # Decoding a large photo below happens synchronously on this thread
         # and can take a real, visible moment - worst case, right at startup
         # for whatever image was last open. Without this, the window (and
@@ -597,19 +610,26 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(f"Opening {Path(path).name}...")
         QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
         QApplication.processEvents()
+        error: Exception | None = None
         try:
             ext = Path(path).suffix.lower()
-            try:
-                if ext in VIDEO_EXTENSIONS:
-                    self._open_video(path)
-                else:
-                    self._open_image(path)
-            except Exception as exc:  # noqa: BLE001 - surfaced to the user
-                QMessageBox.warning(self, "Could not open file", f"{path}\n\n{exc}")
-                return
+            if ext in VIDEO_EXTENSIONS:
+                self._open_video(path)
+            else:
+                self._open_image(path)
+        except Exception as exc:  # noqa: BLE001 - surfaced to the user
+            error = exc
         finally:
             QApplication.restoreOverrideCursor()
             self.statusBar().clearMessage()
+            self._opening_media = False
+
+        if error is not None:
+            # Restoring the cursor above before showing this, rather than
+            # after, is what keeps the dialog from appearing under a busy
+            # wait cursor until the user dismisses it.
+            QMessageBox.warning(self, "Could not open file", f"{path}\n\n{error}")
+            return
 
         self.navigator.select(path)
         if sync_thumbnail:
@@ -667,11 +687,11 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------
     # Rendering
     # ------------------------------------------------------------------
-    def refresh_view(self) -> None:
+    def refresh_view(self, recenter: bool = True) -> None:
         if self.document is None:
             return
         pixmap: QPixmap = pil_to_qpixmap(self.document.preview_image())
-        self.image_view.set_pixmap(pixmap)
+        self.image_view.set_pixmap(pixmap, recenter=recenter)
         w, h = self.document.size
         self.size_label.setText(f"{w} x {h}px")
         self._update_actions_enabled()
