@@ -5,8 +5,18 @@ import os
 import sys
 from pathlib import Path
 
-from PyQt6.QtCore import QSettings, QSize, Qt, QTimer
-from PyQt6.QtGui import QAction, QActionGroup, QIcon, QKeySequence, QPixmap
+from PyQt6.QtCore import QPointF, QRectF, QSettings, QSize, Qt, QTimer
+from PyQt6.QtGui import (
+    QAction,
+    QActionGroup,
+    QBrush,
+    QIcon,
+    QKeySequence,
+    QPainter,
+    QPen,
+    QPixmap,
+    QPolygonF,
+)
 from PyQt6.QtWidgets import (
     QApplication,
     QDockWidget,
@@ -125,6 +135,25 @@ class MainWindow(QMainWindow):
         if not (geometry and self.restoreGeometry(geometry)):
             self.resize(1280, 820)
 
+        # Changing dock sizes (resizeDocks/restoreState) before the window is
+        # ever shown leaves QListWidget's item-layout cache computed against
+        # a stale viewport: the thumbnail grid ends up with items squashed
+        # into ~14px-tall slivers that never recover, even though the dock
+        # itself ends up the right width. Deferring this past the first show
+        # avoids that - same reasoning as the initial-folder-load deferral
+        # below, just for a different Qt layout quirk.
+        QTimer.singleShot(0, self._restore_dock_layout)
+
+    def _restore_dock_layout(self) -> None:
+        # Dock/toolbar layout (sizes, floating, docked area) was never saved,
+        # so the browser panel always fell back to Qt's default width - just
+        # wide enough for a single thumbnail column, which looked broken.
+        # Restore whatever the user last dragged it to, or give it a
+        # sensible multi-column width on first run.
+        state = self.settings.value("window_state")
+        if not (state and self.restoreState(state)):
+            self.resizeDocks([self.browser_dock], [260], Qt.Orientation.Horizontal)
+
     # ------------------------------------------------------------------
     # UI construction
     # ------------------------------------------------------------------
@@ -156,6 +185,14 @@ class MainWindow(QMainWindow):
         self.browser_dock.setAllowedAreas(
             Qt.DockWidgetArea.LeftDockWidgetArea | Qt.DockWidgetArea.RightDockWidgetArea
         )
+        # No float button: it's a tiny, easy to hit by accident, and popping
+        # this panel into its own window isn't something this app needs to
+        # support. Still movable between the left/right dock areas and
+        # closable via the View menu's toggle action.
+        self.browser_dock.setFeatures(
+            QDockWidget.DockWidgetFeature.DockWidgetClosable
+            | QDockWidget.DockWidgetFeature.DockWidgetMovable
+        )
         self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, self.browser_dock)
 
         self.adjustments_panel = AdjustmentsPanel()
@@ -167,12 +204,93 @@ class MainWindow(QMainWindow):
         self.adjust_dock = QDockWidget("Adjustments", self)
         self.adjust_dock.setObjectName("adjust_dock")
         self.adjust_dock.setWidget(self.adjustments_panel)
+        self.adjust_dock.setFeatures(
+            QDockWidget.DockWidgetFeature.DockWidgetClosable
+            | QDockWidget.DockWidgetFeature.DockWidgetMovable
+        )
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.adjust_dock)
         self.adjust_dock.hide()
         self.adjust_dock.visibilityChanged.connect(self._on_adjust_dock_visibility)
 
     def _icon(self, standard) -> QIcon:
         return self.style().standardIcon(standard)
+
+    def _zoom_icon(self, zoom_in: bool) -> QIcon:
+        """A small magnifying-glass icon with a +/- in the lens.
+
+        QStyle's standard icon set has no zoom glyphs, and the previous code
+        reused the generic up/down arrow icons for Zoom In/Out - those read
+        as scroll/navigation arrows, not zoom, which is exactly the kind of
+        "wrong icon" that makes a toolbar hard to trust at a glance.
+        """
+        size = 22
+        pixmap = QPixmap(size, size)
+        pixmap.fill(Qt.GlobalColor.transparent)
+        painter = QPainter(pixmap)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setPen(QPen(self.palette().color(self.foregroundRole()), 1.6))
+        lens = QRectF(2.5, 2.5, 12, 12)
+        painter.drawEllipse(lens)
+        painter.drawLine(QPointF(11.8, 11.8), QPointF(19, 19))
+        cx, cy = lens.center().x(), lens.center().y()
+        painter.drawLine(QPointF(cx - 3, cy), QPointF(cx + 3, cy))
+        if zoom_in:
+            painter.drawLine(QPointF(cx, cy - 3), QPointF(cx, cy + 3))
+        painter.end()
+        return QIcon(pixmap)
+
+    def _nav_icon(self, forward: bool) -> QIcon:
+        """A single filled triangle for Previous/Next.
+
+        Distinct in outline from the curved Undo/Redo arrows below so the
+        two pairs (which used to both be "arrow" glyphs, one single, one
+        double-chevron) can't be mistaken for each other at a glance.
+        """
+        size = 22
+        pixmap = QPixmap(size, size)
+        pixmap.fill(Qt.GlobalColor.transparent)
+        painter = QPainter(pixmap)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QBrush(self.palette().color(self.foregroundRole())))
+        if forward:
+            points = [QPointF(7, 4), QPointF(17, 11), QPointF(7, 18)]
+        else:
+            points = [QPointF(15, 4), QPointF(5, 11), QPointF(15, 18)]
+        painter.drawPolygon(QPolygonF(points))
+        painter.end()
+        return QIcon(pixmap)
+
+    def _undo_redo_icon(self, redo: bool) -> QIcon:
+        """A curved "U-turn" arrow for Undo/Redo.
+
+        The platform's stock back/forward arrow icons (QStyle SP_ArrowBack/
+        SP_ArrowForward) are drawn in a fixed dark color by Qt's fallback
+        style rather than the active palette, so on a dark toolbar they can
+        render as black-on-black and effectively disappear - and their
+        straight-arrow shape looks too much like the Previous/Next icons
+        above. This is palette-colored and a different shape entirely.
+        """
+        size = 22
+        pixmap = QPixmap(size, size)
+        pixmap.fill(Qt.GlobalColor.transparent)
+        painter = QPainter(pixmap)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        if redo:
+            painter.translate(size, 0)
+            painter.scale(-1, 1)
+        color = self.palette().color(self.foregroundRole())
+        pen = QPen(color, 2.0)
+        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+        painter.setPen(pen)
+        arc_rect = QRectF(4, 5, 13, 13)
+        # Qt angles are in 1/16ths of a degree, counterclockwise from 3 o'clock.
+        painter.drawArc(arc_rect, 0, 300 * 16)
+        tip = QPointF(arc_rect.center().x() + arc_rect.width() / 2, arc_rect.center().y())
+        painter.drawLine(tip, QPointF(tip.x() - 1, tip.y() - 5))
+        painter.drawLine(tip, QPointF(tip.x() + 5, tip.y() - 1))
+        painter.end()
+        return QIcon(pixmap)
 
     def _build_actions(self) -> None:
         style = QStyle.StandardPixmap
@@ -208,11 +326,11 @@ class MainWindow(QMainWindow):
         self.act_exit.setShortcut(QKeySequence.StandardKey.Quit)
         self.act_exit.triggered.connect(self.close)
 
-        self.act_undo = QAction(self._icon(style.SP_ArrowBack), "Undo", self)
+        self.act_undo = QAction(self._undo_redo_icon(redo=False), "Undo", self)
         self.act_undo.setShortcut(QKeySequence.StandardKey.Undo)
         self.act_undo.triggered.connect(self.undo)
 
-        self.act_redo = QAction(self._icon(style.SP_ArrowForward), "Redo", self)
+        self.act_redo = QAction(self._undo_redo_icon(redo=True), "Redo", self)
         self.act_redo.setShortcut(QKeySequence.StandardKey.Redo)
         self.act_redo.triggered.connect(self.redo)
 
@@ -252,11 +370,11 @@ class MainWindow(QMainWindow):
         self.act_adjustments.setCheckable(True)
         self.act_adjustments.triggered.connect(self.toggle_adjustments)
 
-        self.act_zoom_in = QAction(self._icon(style.SP_ArrowUp), "Zoom In", self)
+        self.act_zoom_in = QAction(self._zoom_icon(zoom_in=True), "Zoom In", self)
         self.act_zoom_in.setShortcut(QKeySequence.StandardKey.ZoomIn)
         self.act_zoom_in.triggered.connect(self.image_view.zoom_in)
 
-        self.act_zoom_out = QAction(self._icon(style.SP_ArrowDown), "Zoom Out", self)
+        self.act_zoom_out = QAction(self._zoom_icon(zoom_in=False), "Zoom Out", self)
         self.act_zoom_out.setShortcut(QKeySequence.StandardKey.ZoomOut)
         self.act_zoom_out.triggered.connect(self.image_view.zoom_out)
 
@@ -281,11 +399,11 @@ class MainWindow(QMainWindow):
         self.act_slideshow.setCheckable(True)
         self.act_slideshow.triggered.connect(self.toggle_slideshow)
 
-        self.act_prev = QAction(self._icon(style.SP_MediaSeekBackward), "Previous", self)
+        self.act_prev = QAction(self._nav_icon(forward=False), "Previous", self)
         self.act_prev.setShortcut("Left")
         self.act_prev.triggered.connect(self.go_previous)
 
-        self.act_next = QAction(self._icon(style.SP_MediaSeekForward), "Next", self)
+        self.act_next = QAction(self._nav_icon(forward=True), "Next", self)
         self.act_next.setShortcut("Right")
         self.act_next.triggered.connect(self.go_next)
 
@@ -888,6 +1006,7 @@ class MainWindow(QMainWindow):
         self.slideshow_timer.stop()
         self.settings.setValue("last_folder", self.navigator.folder or "")
         self.settings.setValue("window_geometry", self.saveGeometry())
+        self.settings.setValue("window_state", self.saveState())
         super().closeEvent(event)
 
 

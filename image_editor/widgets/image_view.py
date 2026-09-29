@@ -58,6 +58,14 @@ class ImageView(QGraphicsView):
         self._scene.setSceneRect(QRectF(pixmap.rect()))
         if self._fit_mode:
             self.fit_to_window()
+        else:
+            # Not fitting (the user picked a specific zoom level) - keep that
+            # zoom across images as intended, but still center each new image
+            # in the viewport. Without this, the pan position left over from
+            # whatever the previous, differently-sized image was scrolled to
+            # carries straight over, so navigating to the next photo can land
+            # it off in a corner instead of centered like the first one was.
+            self.centerOn(self._pixmap_item)
 
     def clear(self) -> None:
         self._scene.clear()
