@@ -841,6 +841,17 @@ def main() -> int:
     app.setOrganizationName(APP_ORG)
     window = MainWindow()
     window.show()
+
+    # Opened via `pyview-editor <file>` / the desktop launcher's %f, e.g.
+    # when set as the system default handler for an image type.
+    args = [a for a in app.arguments()[1:] if not a.startswith("-")]
+    if args:
+        target = Path(args[0])
+        if target.is_dir():
+            window.open_folder(str(target))
+        elif target.is_file():
+            window.open_folder(str(target.parent), select_path=str(target))
+
     return app.exec()
 
 

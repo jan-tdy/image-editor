@@ -114,6 +114,25 @@ image_editor/
     stitch_dialog.py             Join Images dialog
 ```
 
+## Set as the system default image viewer (Linux)
+
+```bash
+./packaging/install.sh
+```
+
+This installs a `pyview-editor` launcher to `~/.local/bin`, registers a
+desktop entry + icon under `~/.local/share`, and (unless you pass
+`--no-default`) runs `xdg-mime default` so PyView Editor becomes the default
+handler for every image type it supports (JPEG, PNG, BMP, GIF, WEBP, TIFF,
+ICO, PPM/PGM/PBM). No `sudo` needed — everything is installed per-user.
+
+To check or change the default handler for a single type later:
+
+```bash
+xdg-mime query default image/png
+xdg-mime default org.gnome.eog.desktop image/png   # revert, e.g. to eog
+```
+
 ## Jadiv Code Master
 
 This repo ships a `codemaster-metadata.json` so it's discoverable and

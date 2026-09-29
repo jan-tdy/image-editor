@@ -17,6 +17,11 @@
       "entrypoint": "main.py",
       "run": "python3 main.py",
       "requirements": "requirements.txt",
+      "mime_types": [
+        "image/jpeg", "image/png", "image/bmp", "image/gif", "image/webp",
+        "image/tiff", "image/vnd.microsoft.icon", "image/x-portable-pixmap",
+        "image/x-portable-graymap", "image/x-portable-bitmap"
+      ],
       "update_method": "sync",
       "maintained": true
     }
