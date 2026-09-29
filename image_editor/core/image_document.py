@@ -179,6 +179,10 @@ class ImageDocument:
     def crop(self, box: tuple[int, int, int, int]) -> None:
         self._apply_geometry(lambda img: image_ops.crop(img, box))
 
+    def auto_adjust(self) -> None:
+        """One-click auto contrast/levels, baked in as its own undo step."""
+        self._apply_geometry(image_ops.autocontrast)
+
     # -- undo / redo ----------------------------------------------------------
     def can_undo(self) -> bool:
         return bool(self._undo_stack)

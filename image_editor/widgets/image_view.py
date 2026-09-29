@@ -50,7 +50,7 @@ class ImageView(QGraphicsView):
         self._rect_at_drag_start = QRectF()
 
     # -- image loading --------------------------------------------------
-    def set_pixmap(self, pixmap: QPixmap) -> None:
+    def set_pixmap(self, pixmap: QPixmap, recenter: bool = True) -> None:
         self._scene.clear()
         self._crop_rect_item = None
         self._crop_handles.clear()
@@ -58,6 +58,18 @@ class ImageView(QGraphicsView):
         self._scene.setSceneRect(QRectF(pixmap.rect()))
         if self._fit_mode:
             self.fit_to_window()
+        elif recenter:
+            # Not fitting (the user picked a specific zoom level) - keep that
+            # zoom across images as intended, but still center each new image
+            # in the viewport. Without this, the pan position left over from
+            # whatever the previous, differently-sized image was scrolled to
+            # carries straight over, so navigating to the next photo can land
+            # it off in a corner instead of centered like the first one was.
+            # Callers pass recenter=False for a live preview refresh of the
+            # *same* image (e.g. dragging an adjustment slider), where
+            # snapping back to center on every tick would fight the user's
+            # own panning.
+            self.centerOn(self._pixmap_item)
 
     def clear(self) -> None:
         self._scene.clear()

@@ -8,6 +8,7 @@ from PyQt6.QtCore import QSize, Qt, QTimer
 from PyQt6.QtGui import QColor, QIcon, QPixmap
 from PyQt6.QtWidgets import (
     QAbstractItemView,
+    QApplication,
     QCheckBox,
     QComboBox,
     QDialog,
@@ -171,20 +172,29 @@ class StitchDialog(QDialog):
     # List management
     # ------------------------------------------------------------------
     def add_paths(self, paths: list[str]) -> None:
-        for path in paths:
-            if Path(path).suffix.lower() not in IMAGE_EXTENSIONS:
-                continue
-            try:
-                image = load_with_orientation(path)
-            except Exception:
-                continue
-            self._image_cache[path] = image
-            item = QListWidgetItem(Path(path).name)
-            item.setData(Qt.ItemDataRole.UserRole, path)
-            thumb = image.copy()
-            thumb.thumbnail((THUMB, THUMB), Image.Resampling.LANCZOS)
-            item.setIcon(QIcon(pil_to_qpixmap(thumb)))
-            self.list_widget.addItem(item)
+        # Each image is fully decoded here (kept at full resolution in
+        # _image_cache for the final save), which for several large photos
+        # can take a few seconds with nothing on screen changing - it looks
+        # exactly like the dialog has frozen. A busy cursor at least makes
+        # clear the app is working, not stuck.
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        try:
+            for path in paths:
+                if Path(path).suffix.lower() not in IMAGE_EXTENSIONS:
+                    continue
+                try:
+                    image = load_with_orientation(path)
+                except Exception:
+                    continue
+                self._image_cache[path] = image
+                item = QListWidgetItem(Path(path).name)
+                item.setData(Qt.ItemDataRole.UserRole, path)
+                thumb = image.copy()
+                thumb.thumbnail((THUMB, THUMB), Image.Resampling.LANCZOS)
+                item.setIcon(QIcon(pil_to_qpixmap(thumb)))
+                self.list_widget.addItem(item)
+        finally:
+            QApplication.restoreOverrideCursor()
         self._queue_preview()
 
     def _add_files_dialog(self) -> None:
