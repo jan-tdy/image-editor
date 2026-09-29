@@ -61,6 +61,10 @@ class ThumbnailPanel(QWidget):
         self.list_widget.setSpacing(4)
         self.list_widget.setWordWrap(True)
         self.list_widget.setWrapping(True)
+        # Required for the app stylesheet's QListWidget::item:hover rule to
+        # actually light up as the mouse moves - Qt doesn't track hover on
+        # item views by default.
+        self.list_widget.setMouseTracking(True)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
