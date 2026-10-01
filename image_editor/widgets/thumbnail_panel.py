@@ -5,8 +5,8 @@ from PyQt6.QtCore import QFileInfo, QObject, QRunnable, QSize, Qt, QThreadPool, 
 from PyQt6.QtGui import QIcon, QImage, QPixmap
 from PyQt6.QtWidgets import QFileIconProvider, QListWidget, QListWidgetItem, QVBoxLayout, QWidget
 
-from ..core.convert import make_thumbnail_qimage
-from ..core.image_ops import load_with_orientation
+from ..core.convert import pil_to_qimage
+from ..core.image_ops import load_thumbnail
 from ..models.file_model import MediaEntry, list_media
 
 THUMB_SIZE = 96
@@ -27,8 +27,8 @@ class _ThumbnailWorker(QRunnable):
         # to be constructed on the main thread, and this runs in a
         # QThreadPool worker thread.
         try:
-            image = load_with_orientation(self.path)
-            qimage = make_thumbnail_qimage(image, THUMB_SIZE)
+            image = load_thumbnail(self.path, THUMB_SIZE)
+            qimage = pil_to_qimage(image)
         except Exception:
             return
         try:

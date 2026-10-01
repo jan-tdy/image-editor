@@ -138,3 +138,23 @@ def load_with_orientation(path: str) -> Image.Image:
     img = ImageOps.exif_transpose(img)
     img.load()
     return img
+
+
+def load_thumbnail(path: str, size: int) -> Image.Image:
+    """Open an image already downscaled to roughly ``size``, oriented upright.
+
+    Decoding a multi-megapixel photo at full resolution just to shrink it to
+    a thumbnail wastes most of the work: for JPEGs, ``Image.draft`` asks the
+    decoder itself to hand back a smaller image (using cheap DCT downscaling),
+    so ``img.load()`` below never materializes the full-size pixel buffer.
+    Other formats ignore draft and still load at full size, but JPEG is the
+    overwhelming majority of photos in a typical folder, so this still turns
+    "decode everything in Downloads" from a multi-second-per-file cost into
+    a near-instant one.
+    """
+    img = Image.open(path)
+    img.draft("RGB", (size, size))
+    img = ImageOps.exif_transpose(img)
+    img.load()
+    img.thumbnail((size, size), Image.Resampling.LANCZOS)
+    return img
