@@ -1020,10 +1020,13 @@ class MainWindow(QMainWindow):
         self._reload_after_external_change()
 
     def open_stitch_dialog(self) -> None:
-        initial_paths = [
-            e.path for e in self.navigator.entries if Path(e.path).suffix.lower() in IMAGE_EXTENSIONS
-        ] if self.navigator.entries else None
-        dialog = StitchDialog(self, initial_paths=initial_paths)
+        # Unlike Batch Rename & Edit (meant to run across a whole folder),
+        # Join Images is for picking out a handful of photos to combine -
+        # preloading every file in the current folder here used to mean
+        # opening it while browsing a folder with thousands of images (e.g.
+        # Downloads) queued a decode of all of them for no reason. Start
+        # empty; the user adds exactly the images they want via "Add Images...".
+        dialog = StitchDialog(self)
         dialog.exec()
         self._reload_after_external_change()
 
