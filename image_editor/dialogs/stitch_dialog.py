@@ -4,11 +4,10 @@ from __future__ import annotations
 from pathlib import Path
 
 from PIL import Image
-from PyQt6.QtCore import QSize, Qt, QTimer
-from PyQt6.QtGui import QColor, QIcon, QPixmap
+from PyQt6.QtCore import QObject, QRunnable, QSize, Qt, QThreadPool, QTimer, pyqtSignal
+from PyQt6.QtGui import QColor, QIcon, QImage, QPixmap
 from PyQt6.QtWidgets import (
     QAbstractItemView,
-    QApplication,
     QCheckBox,
     QComboBox,
     QDialog,
@@ -27,7 +26,7 @@ from PyQt6.QtWidgets import (
 )
 
 from ..constants import IMAGE_EXTENSIONS
-from ..core.convert import pil_to_qpixmap
+from ..core.convert import make_thumbnail_qimage, pil_to_qpixmap
 from ..core.image_ops import load_with_orientation
 from ..core.stitch_ops import StitchOptions, compose
 
@@ -44,6 +43,44 @@ THUMB = 64
 PREVIEW_CAP = 360
 
 
+class _LoadSignals(QObject):
+    ready = pyqtSignal(str, object, QImage)
+    failed = pyqtSignal(str)
+
+
+class _LoadWorker(QRunnable):
+    """Decodes one image off the GUI thread.
+
+    Join Images keeps every added photo at full resolution in memory (the
+    final composite needs it), so adding several large photos used to decode
+    them one by one on the GUI thread behind a busy cursor - the whole
+    dialog was unresponsive until the last one finished. Doing the same
+    decode here, in a worker thread, keeps the dialog interactive (new items
+    simply pop in as each decode completes) while loading just as much data.
+    """
+
+    def __init__(self, path: str):
+        super().__init__()
+        self.path = path
+        self.signals = _LoadSignals()
+
+    def run(self) -> None:
+        try:
+            image = load_with_orientation(self.path)
+            qimage = make_thumbnail_qimage(image, THUMB)
+        except Exception:
+            try:
+                self.signals.failed.emit(self.path)
+            except RuntimeError:
+                pass
+            return
+        try:
+            self.signals.ready.emit(self.path, image, qimage)
+        except RuntimeError:
+            # Dialog was closed while this decode was still in flight.
+            pass
+
+
 class StitchDialog(QDialog):
     def __init__(self, parent=None, initial_paths: list[str] | None = None):
         super().__init__(parent)
@@ -51,6 +88,7 @@ class StitchDialog(QDialog):
         self.resize(1000, 640)
 
         self._image_cache: dict[str, Image.Image] = {}
+        self._pool = QThreadPool.globalInstance()
         self._preview_timer = QTimer(self)
         self._preview_timer.setSingleShot(True)
         self._preview_timer.setInterval(150)
@@ -172,30 +210,42 @@ class StitchDialog(QDialog):
     # List management
     # ------------------------------------------------------------------
     def add_paths(self, paths: list[str]) -> None:
-        # Each image is fully decoded here (kept at full resolution in
-        # _image_cache for the final save), which for several large photos
-        # can take a few seconds with nothing on screen changing - it looks
-        # exactly like the dialog has frozen. A busy cursor at least makes
-        # clear the app is working, not stuck.
-        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
-        try:
-            for path in paths:
-                if Path(path).suffix.lower() not in IMAGE_EXTENSIONS:
-                    continue
-                try:
-                    image = load_with_orientation(path)
-                except Exception:
-                    continue
-                self._image_cache[path] = image
-                item = QListWidgetItem(Path(path).name)
-                item.setData(Qt.ItemDataRole.UserRole, path)
-                thumb = image.copy()
-                thumb.thumbnail((THUMB, THUMB), Image.Resampling.LANCZOS)
-                item.setIcon(QIcon(pil_to_qpixmap(thumb)))
-                self.list_widget.addItem(item)
-        finally:
-            QApplication.restoreOverrideCursor()
+        # Each image is kept at full resolution in _image_cache for the
+        # final save. Decoding several large photos takes a real moment, so
+        # that decode happens in a background worker per path instead of on
+        # the GUI thread: each list item appears as a placeholder immediately
+        # and fills in (icon + preview) as its decode completes, rather than
+        # the whole dialog freezing until every photo is done.
+        for path in paths:
+            if Path(path).suffix.lower() not in IMAGE_EXTENSIONS:
+                continue
+            item = QListWidgetItem(Path(path).name)
+            item.setData(Qt.ItemDataRole.UserRole, path)
+            self.list_widget.addItem(item)
+
+            worker = _LoadWorker(path)
+            worker.signals.ready.connect(self._on_image_ready)
+            worker.signals.failed.connect(self._on_image_failed)
+            self._pool.start(worker)
+
+    def _item_for_path(self, path: str) -> QListWidgetItem | None:
+        for i in range(self.list_widget.count()):
+            item = self.list_widget.item(i)
+            if item.data(Qt.ItemDataRole.UserRole) == path:
+                return item
+        return None
+
+    def _on_image_ready(self, path: str, image: Image.Image, qimage) -> None:
+        self._image_cache[path] = image
+        item = self._item_for_path(path)
+        if item is not None:
+            item.setIcon(QIcon(QPixmap.fromImage(qimage)))
         self._queue_preview()
+
+    def _on_image_failed(self, path: str) -> None:
+        item = self._item_for_path(path)
+        if item is not None:
+            self.list_widget.takeItem(self.list_widget.row(item))
 
     def _add_files_dialog(self) -> None:
         exts = " ".join(f"*{e}" for e in sorted(IMAGE_EXTENSIONS))
