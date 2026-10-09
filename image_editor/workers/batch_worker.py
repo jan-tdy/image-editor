@@ -143,6 +143,8 @@ def process_one(job: BatchFileJob, settings: BatchSettings) -> BatchLogEntry:
             if out_path == src:
                 entry.mode = "noop"
             elif settings.output_mode == "folder":
+                if out_path.exists():
+                    raise FileExistsError(f"{out_path} already exists")
                 shutil.copy2(src, out_path)
                 entry.mode = "copied"
             else:
@@ -157,6 +159,8 @@ def process_one(job: BatchFileJob, settings: BatchSettings) -> BatchLogEntry:
             if not rename_or_move:
                 entry.mode = "noop"
             elif settings.output_mode == "folder":
+                if out_path.exists():
+                    raise FileExistsError(f"{out_path} already exists")
                 shutil.copy2(src, out_path)
                 entry.mode = "copied"
             else:
@@ -170,6 +174,8 @@ def process_one(job: BatchFileJob, settings: BatchSettings) -> BatchLogEntry:
         image = _apply_pixel_ops(image, settings)
 
         if settings.output_mode == "folder":
+            if out_path.exists():
+                raise FileExistsError(f"{out_path} already exists")
             _save_image(image, out_path, settings.jpeg_quality)
             entry.mode = "copied"
             return entry
