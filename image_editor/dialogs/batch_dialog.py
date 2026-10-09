@@ -1,6 +1,7 @@
 """Batch rename / convert / resize / adjust dialog."""
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 from PyQt6.QtCore import Qt
@@ -30,9 +31,15 @@ from PyQt6.QtWidgets import (
 )
 
 from ..constants import IMAGE_EXTENSIONS, VIDEO_EXTENSIONS
-from ..core.rename_ops import RenamePlan, RenameResult, find_conflicts, preview_names
+from ..core.rename_ops import RenamePlan, RenameResult, preview_names
 from ..widgets.adjustments_panel import AdjustSlider
-from ..workers.batch_worker import BatchFileJob, BatchSettings, BatchWorker, undo_batch
+from ..workers.batch_worker import (
+    BatchFileJob,
+    BatchSettings,
+    BatchWorker,
+    _resolve_out_path,
+    undo_batch,
+)
 
 FORMAT_CHOICES = {
     "Keep original": None,
@@ -361,12 +368,12 @@ class BatchDialog(QDialog):
     # ------------------------------------------------------------------
     # Preview
     # ------------------------------------------------------------------
-    def _refresh_preview(self) -> None:
-        paths = [self._row_path(r) for r in range(self.table.rowCount())]
-        if not paths:
-            return
-
-        if self.rename_group.isChecked():
+    def _planned_jobs(
+        self, paths: list[str], settings: BatchSettings
+    ) -> tuple[list[BatchFileJob], list[RenameResult]]:
+        """Resolve rename targets (if enabled) and build the job list the
+        worker would act on, without touching disk."""
+        if settings.do_rename:
             plan = RenamePlan(
                 pattern=self.pattern_edit.text() or "{name}",
                 start=self.start_spin.value(),
@@ -381,34 +388,56 @@ class BatchDialog(QDialog):
         else:
             results = [RenameResult(p, Path(p).name) for p in paths]
 
-        target_ext = FORMAT_CHOICES[self.format_combo.currentText()] if self.convert_group.isChecked() else None
-        if target_ext:
-            adjusted = []
-            for r in results:
-                if r.error:
-                    adjusted.append(r)
-                    continue
-                if Path(r.old_path).suffix.lower() in VIDEO_EXTENSIONS:
-                    adjusted.append(r)  # videos are never re-encoded
-                else:
-                    adjusted.append(RenameResult(r.old_path, Path(r.new_name).stem + target_ext))
-            results = adjusted
+        jobs = [
+            BatchFileJob(
+                src_path=path,
+                is_video=Path(path).suffix.lower() in VIDEO_EXTENSIONS,
+                new_name=None if result.error else result.new_name,
+            )
+            for path, result in zip(paths, results)
+        ]
+        return jobs, results
 
-        conflicts = find_conflicts(results)
-        conflict_sources = {src for sources in conflicts.values() for src in sources}
+    def _conflicting_sources(self, jobs: list[BatchFileJob], settings: BatchSettings) -> set[str]:
+        """Return src_paths whose real output path (after rename and any
+        format conversion) collides with another job in this run, or with a
+        pre-existing file outside the batch."""
+        targets: dict[str, list[str]] = {}
+        for job in jobs:
+            target = str(_resolve_out_path(job, settings))
+            targets.setdefault(target, []).append(job.src_path)
 
-        for row, result in enumerate(results):
+        conflict_sources: set[str] = set()
+        for target, sources in targets.items():
+            if len(sources) > 1:
+                conflict_sources.update(sources)
+                continue
+            src = sources[0]
+            if os.path.exists(target) and os.path.abspath(target) != os.path.abspath(src):
+                conflict_sources.add(src)
+        return conflict_sources
+
+    def _refresh_preview(self) -> None:
+        paths = [self._row_path(r) for r in range(self.table.rowCount())]
+        if not paths:
+            return
+
+        settings = self._build_settings()
+        jobs, results = self._planned_jobs(paths, settings)
+        conflict_sources = self._conflicting_sources(jobs, settings)
+
+        for row, (job, result) in enumerate(zip(jobs, results)):
             item = self.table.item(row, 2)
             if item is None:
                 continue
             if result.error:
                 item.setText(f"⚠ {result.error}")
                 item.setForeground(Qt.GlobalColor.red)
-            elif result.old_path in conflict_sources:
-                item.setText(f"⚠ conflict: {result.new_name}")
+            elif job.src_path in conflict_sources:
+                item.setText(f"⚠ conflict: {_resolve_out_path(job, settings).name}")
                 item.setForeground(Qt.GlobalColor.red)
             else:
-                item.setText(result.new_name)
+                item.setText(_resolve_out_path(job, settings).name)
                 item.setForeground(Qt.GlobalColor.black)
 
     # ------------------------------------------------------------------
@@ -451,34 +480,18 @@ class BatchDialog(QDialog):
             QMessageBox.warning(self, "Batch", "Choose an output folder first.")
             return None
 
-        new_names: dict[str, str] = {}
-        if settings.do_rename:
-            plan = RenamePlan(
-                pattern=self.pattern_edit.text() or "{name}",
-                start=self.start_spin.value(),
-                step=self.step_spin.value(),
-                digits=self.digits_spin.value(),
-                case=CASE_CHOICES[self.case_combo.currentText()],
-                find=self.find_edit.text(),
-                replace=self.replace_edit.text(),
-                use_regex=self.regex_check.isChecked(),
-            )
-            results = preview_names(paths, plan)
-            errors = [r for r in results if r.error]
-            if errors:
-                QMessageBox.warning(self, "Batch", f"Rename pattern error: {errors[0].error}")
-                return None
-            conflicts = find_conflicts(results)
-            if conflicts:
-                names = "\n".join(list(conflicts.keys())[:8])
-                QMessageBox.warning(self, "Batch", f"Naming conflicts detected, aborting:\n{names}")
-                return None
-            new_names = {r.old_path: r.new_name for r in results}
+        jobs, results = self._planned_jobs(paths, settings)
+        errors = [r for r in results if r.error]
+        if errors:
+            QMessageBox.warning(self, "Batch", f"Rename pattern error: {errors[0].error}")
+            return None
 
-        jobs = []
-        for path in paths:
-            ext = Path(path).suffix.lower()
-            jobs.append(BatchFileJob(src_path=path, is_video=(ext in VIDEO_EXTENSIONS), new_name=new_names.get(path)))
+        conflict_sources = self._conflicting_sources(jobs, settings)
+        if conflict_sources:
+            names = "\n".join(sorted(Path(s).name for s in conflict_sources)[:8])
+            QMessageBox.warning(self, "Batch", f"Output filename conflicts detected, aborting:\n{names}")
+            return None
+
         return jobs
 
     def _run_batch(self) -> None:

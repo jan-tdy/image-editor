@@ -126,6 +126,48 @@ class BatchWorkerTests(unittest.TestCase):
             self.assertEqual(result.size, (2, 3))
             self.assertEqual(result.mode, "RGB")
 
+    def test_folder_mode_refuses_to_overwrite_an_existing_pixel_output(self):
+        source = self.make_image()
+        output = self.folder / "output"
+        output.mkdir()
+        occupied = output / "source.jpg"
+        occupied.write_bytes(b"pre-existing")
+        settings = BatchSettings(
+            do_convert_resize=True,
+            target_format=".jpg",
+            output_mode="folder",
+            output_folder=str(output),
+        )
+        entry = process_one(BatchFileJob(str(source)), settings)
+        self.assertEqual(entry.mode, "error")
+        self.assertIn("already exists", entry.error)
+        self.assertEqual(occupied.read_bytes(), b"pre-existing")
+
+    def test_folder_mode_refuses_to_overwrite_an_existing_plain_copy(self):
+        source = self.make_image()
+        output = self.folder / "output"
+        output.mkdir()
+        occupied = output / "source.png"
+        occupied.write_bytes(b"pre-existing")
+        settings = BatchSettings(output_mode="folder", output_folder=str(output))
+        entry = process_one(BatchFileJob(str(source)), settings)
+        self.assertEqual(entry.mode, "error")
+        self.assertIn("already exists", entry.error)
+        self.assertEqual(occupied.read_bytes(), b"pre-existing")
+
+    def test_folder_mode_refuses_to_overwrite_an_existing_video_copy(self):
+        source = self.folder / "clip.mp4"
+        source.write_bytes(b"not-real-video-but-verbatim")
+        output = self.folder / "output"
+        output.mkdir()
+        occupied = output / "clip.mp4"
+        occupied.write_bytes(b"pre-existing")
+        settings = BatchSettings(output_mode="folder", output_folder=str(output))
+        entry = process_one(BatchFileJob(str(source), is_video=True), settings)
+        self.assertEqual(entry.mode, "error")
+        self.assertIn("already exists", entry.error)
+        self.assertEqual(occupied.read_bytes(), b"pre-existing")
+
     def test_overwrite_backup_and_undo_restore_exact_original_bytes(self):
         source = self.make_image()
         original = source.read_bytes()
