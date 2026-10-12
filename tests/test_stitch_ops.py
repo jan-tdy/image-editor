@@ -84,6 +84,27 @@ class StitchOpsTests(unittest.TestCase):
         )
         self.assertEqual(result.size, (2, 4))
 
+    def test_grid_match_smallest_shrinks_cells_to_smallest_image(self):
+        result = compose(
+            [solid((8, 8), "red"), solid((2, 2), "blue")],
+            StitchOptions(direction="grid", columns=2, spacing=0, resize_mode="match_smallest"),
+        )
+        self.assertEqual(result.size, (4, 2))
+
+    def test_grid_match_largest_grows_cells_to_largest_image(self):
+        result = compose(
+            [solid((8, 8), "red"), solid((2, 2), "blue")],
+            StitchOptions(direction="grid", columns=2, spacing=0, resize_mode="match_largest"),
+        )
+        self.assertEqual(result.size, (16, 8))
+
+    def test_grid_custom_size_sets_square_cells(self):
+        result = compose(
+            [solid((8, 8), "red"), solid((2, 2), "blue")],
+            StitchOptions(direction="grid", columns=2, spacing=0, resize_mode="custom", custom_size=5),
+        )
+        self.assertEqual(result.size, (10, 5))
+
 
 if __name__ == "__main__":
     unittest.main()
