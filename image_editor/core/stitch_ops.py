@@ -98,13 +98,21 @@ def compose_vertical(images: list[Image.Image], options: StitchOptions) -> Image
     return canvas
 
 
+def _grid_cell_size(images: list[Image.Image], options: StitchOptions) -> tuple[int, int]:
+    if options.resize_mode == "match_smallest":
+        return min(img.width for img in images), min(img.height for img in images)
+    if options.resize_mode == "custom":
+        size = max(1, options.custom_size)
+        return size, size
+    return max(img.width for img in images), max(img.height for img in images)
+
+
 def compose_grid(images: list[Image.Image], options: StitchOptions) -> Image.Image:
     spacing = max(0, options.spacing)
     columns = max(1, options.columns)
     normalize = options.resize_mode != "none"
 
-    cell_w = max(img.width for img in images)
-    cell_h = max(img.height for img in images)
+    cell_w, cell_h = _grid_cell_size(images, options)
     rows = math.ceil(len(images) / columns)
     total_w = cell_w * columns + spacing * (columns - 1)
     total_h = cell_h * rows + spacing * (rows - 1)
