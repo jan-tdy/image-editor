@@ -17,7 +17,7 @@ from ..core.autostack_ops import AutoStackError, AutoStackOptions, downscale_for
 class AutoStackWorker(QThread):
     loadProgress = pyqtSignal(int, int, str)  # done, total, path
     stitchingStarted = pyqtSignal()
-    finishedStack = pyqtSignal(object)  # PIL.Image.Image
+    finishedStack = pyqtSignal(object)  # AutoStackResult
     failed = pyqtSignal(str)
 
     def __init__(self, paths: list[str], options: AutoStackOptions, parent=None):

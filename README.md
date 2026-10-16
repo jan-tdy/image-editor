@@ -58,12 +58,19 @@ A fast, IrfanView-style image and video viewer/editor built with PyQt6.
   - Add individual files or a whole folder; a background pass does the
     feature matching, alignment and blending (OpenCV's `Stitcher`), with
     per-file load progress and a busy indicator while it aligns/blends.
-  - **Scene type**: "Overhead / flat scene" (recommended for anything shot
-    from above — a garden, a field, a document) or "Rotating camera" for a
-    classic panorama shot by turning on the spot.
+  - **Scene type**: "Auto" (default — tries "Overhead / flat scene" and
+    "Rotating camera" and keeps whichever includes more of the photos),
+    "Overhead / flat scene" (a garden, a field, a document), or "Rotating
+    camera" for a classic panorama shot by turning on the spot.
   - **Working size** caps the resolution used for matching/blending (lower
     = faster and lighter on memory; "Full resolution" is slow and can use a
     lot of RAM with many large photos).
+  - The underlying stitcher can leave photos out of the result without that
+    being an error — e.g. a stack of 100+ handheld overhead shots usually
+    doesn't form one single provable chain. When that happens, Auto-Stack
+    says how many of the photos were actually used and greys out the
+    left-out ones in the list, instead of silently handing back a small or
+    distorted result with no indication anything was skipped.
   - On failure (not enough overlap/detail between photos) it reports why,
     instead of crashing — try the other scene type or add more overlap
     between shots.

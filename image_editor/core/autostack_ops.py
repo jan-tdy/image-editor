@@ -4,8 +4,15 @@ large image, by matching visual patterns between photos instead of placing
 them on a fixed layout (see core/stitch_ops.py for that simpler tool).
 
 Built on OpenCV's Stitcher, which does the feature detection, matching,
-alignment and blending; this module just adapts it to PIL images and turns
-its failure codes into messages a user can act on.
+alignment and blending; this module adapts it to PIL images, turns its
+failure codes into messages a user can act on, and - critically - uses its
+two-step API (estimateTransform + composePanorama) instead of the one-shot
+stitch(). The one-shot call will happily return status OK while silently
+leaving out any photo it couldn't confidently chain to the rest (e.g. most
+of a large, not-strictly-sequential batch), with nothing in the return
+value to say so. The two-step API exposes stitcher.component(): the indices
+of the photos actually used, so callers can tell the user when their batch
+only partially stitched instead of quietly handing back a tiny result.
 """
 from __future__ import annotations
 
@@ -17,12 +24,19 @@ from PIL import Image
 
 MODE_FLAT = "flat"
 MODE_PANORAMA = "panorama"
-STITCH_MODES = (MODE_FLAT, MODE_PANORAMA)
+MODE_AUTO = "auto"
+STITCH_MODES = (MODE_AUTO, MODE_FLAT, MODE_PANORAMA)
 
 _CV_MODE = {
     MODE_FLAT: cv2.Stitcher_SCANS,
     MODE_PANORAMA: cv2.Stitcher_PANORAMA,
 }
+# Auto tries every real mode and keeps whichever manages to chain together
+# the most photos - neither mode is reliably better for an arbitrary batch
+# (SCANS assumes a fairly direct scan/grid pattern; PANORAMA does full
+# bundle adjustment and tends to cope better with photos taken by walking
+# around in no particular order, but not always).
+_AUTO_CANDIDATES = (MODE_FLAT, MODE_PANORAMA)
 
 _STATUS_MESSAGES = {
     cv2.Stitcher_ERR_NEED_MORE_IMGS: (
@@ -42,8 +56,24 @@ _STATUS_MESSAGES = {
 
 @dataclass
 class AutoStackOptions:
-    mode: str = MODE_FLAT
+    mode: str = MODE_AUTO
     max_working_dim: int = 2000  # 0 = use full resolution
+
+
+@dataclass
+class AutoStackResult:
+    image: Image.Image
+    mode_used: str
+    used_indices: list[int]
+    total_count: int
+
+    @property
+    def used_count(self) -> int:
+        return len(self.used_indices)
+
+    @property
+    def dropped_count(self) -> int:
+        return self.total_count - self.used_count
 
 
 class AutoStackError(Exception):
@@ -73,22 +103,60 @@ def downscale_for_stitch(image: Image.Image, max_dim: int) -> Image.Image:
     return scaled
 
 
-def stitch(images: list[Image.Image], options: AutoStackOptions) -> Image.Image:
+def _try_estimate(mode: str, prepared: list[np.ndarray]):
+    """Run estimateTransform() for one mode. Returns (stitcher, indices) on
+    success, or (None, status) on failure."""
+    stitcher = cv2.Stitcher_create(_CV_MODE[mode])
+    status = stitcher.estimateTransform(prepared)
+    if status != cv2.Stitcher_OK:
+        return None, status
+    return stitcher, stitcher.component()
+
+
+def stitch(images: list[Image.Image], options: AutoStackOptions) -> AutoStackResult:
     """Combine overlapping photos into one image by matching visual features.
 
-    Raises AutoStackError (with a message safe to show the user) if the
-    photos could not be aligned/blended.
+    The result reports which of the input photos actually made it into the
+    final image (``used_indices``/``used_count``/``dropped_count``) - the
+    underlying stitcher can and does leave photos out when it can't chain
+    them to the rest with enough confidence, without that being an error.
+
+    Raises AutoStackError (with a message safe to show the user) if no mode
+    could align/blend anything at all.
     """
     if len(images) < 2:
         raise AutoStackError("Add at least two overlapping photos.")
 
     prepared = [_pil_to_cv(downscale_for_stitch(img, options.max_working_dim)) for img in images]
 
-    stitcher = cv2.Stitcher_create(_CV_MODE.get(options.mode, cv2.Stitcher_SCANS))
-    status, result = stitcher.stitch(prepared)
+    candidates = _AUTO_CANDIDATES if options.mode == MODE_AUTO else (options.mode,)
 
-    if status != cv2.Stitcher_OK:
-        message = _STATUS_MESSAGES.get(status, f"Stitching failed (OpenCV status {status}).")
+    best: tuple[object, str, object] | None = None  # (stitcher, mode, indices)
+    last_status = None
+    for mode in candidates:
+        stitcher, outcome = _try_estimate(mode, prepared)
+        if stitcher is None:
+            last_status = outcome
+            continue
+        indices = outcome
+        if best is None or len(indices) > len(best[2]):
+            best = (stitcher, mode, indices)
+        if len(indices) == len(images):
+            break  # already used every photo - no point trying another mode
+
+    if best is None:
+        message = _STATUS_MESSAGES.get(last_status, f"Stitching failed (OpenCV status {last_status}).")
         raise AutoStackError(message)
 
-    return _cv_to_pil(result)
+    stitcher, mode_used, indices = best
+    status, pano = stitcher.composePanorama()
+    if status != cv2.Stitcher_OK:
+        message = _STATUS_MESSAGES.get(status, f"Stitching failed while blending (OpenCV status {status}).")
+        raise AutoStackError(message)
+
+    return AutoStackResult(
+        image=_cv_to_pil(pano),
+        mode_used=mode_used,
+        used_indices=sorted(int(i) for i in indices),
+        total_count=len(images),
+    )

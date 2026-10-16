@@ -4,6 +4,7 @@ import numpy as np
 from PIL import Image
 
 from image_editor.core.autostack_ops import (
+    MODE_AUTO,
     AutoStackError,
     AutoStackOptions,
     downscale_for_stitch,
@@ -56,7 +57,32 @@ class StitchTests(unittest.TestCase):
         result = stitch([left, right], AutoStackOptions(mode="flat"))
         # The combined image should cover roughly the full original width,
         # not just one of the two crops.
-        self.assertGreater(result.width, 350)
+        self.assertGreater(result.image.width, 350)
+        self.assertEqual(result.used_indices, [0, 1])
+        self.assertEqual(result.used_count, 2)
+        self.assertEqual(result.dropped_count, 0)
+
+    def test_reports_photos_dropped_for_not_matching_anything(self):
+        base = noisy_image((500, 300))
+        left = base.crop((0, 0, 350, 300))
+        right = base.crop((150, 0, 500, 300))
+        unrelated = noisy_image((300, 300))  # different seed-independent noise, no overlap
+        unrelated = Image.eval(unrelated, lambda p: 255 - p)  # make sure it differs from the rest
+
+        result = stitch([left, right, unrelated], AutoStackOptions(mode="flat"))
+
+        self.assertEqual(result.used_count, 2)
+        self.assertEqual(result.dropped_count, 1)
+        self.assertEqual(result.total_count, 3)
+        self.assertNotIn(2, result.used_indices)
+
+    def test_auto_mode_picks_whichever_candidate_uses_more_photos(self):
+        base = noisy_image((500, 300))
+        left = base.crop((0, 0, 350, 300))
+        right = base.crop((150, 0, 500, 300))
+        result = stitch([left, right], AutoStackOptions(mode=MODE_AUTO))
+        self.assertEqual(result.used_count, 2)
+        self.assertIn(result.mode_used, ("flat", "panorama"))
 
 
 if __name__ == "__main__":
