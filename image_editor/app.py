@@ -35,6 +35,7 @@ from PyQt6.QtWidgets import (
 from .constants import APP_NAME, APP_ORG, IMAGE_EXTENSIONS, VIDEO_EXTENSIONS
 from .core.convert import pil_to_qpixmap
 from .core.image_document import ImageDocument
+from .dialogs.autostack_dialog import AutoStackDialog
 from .dialogs.batch_dialog import BatchDialog
 from .dialogs.stitch_dialog import StitchDialog
 from .models.file_model import FolderNavigator
@@ -453,6 +454,10 @@ class MainWindow(QMainWindow):
         self.act_stitch.setShortcut("Ctrl+J")
         self.act_stitch.triggered.connect(self.open_stitch_dialog)
 
+        self.act_autostack = QAction("Auto-Stack (Smart Stitch)...", self)
+        self.act_autostack.setShortcut("Ctrl+Shift+J")
+        self.act_autostack.triggered.connect(self.open_autostack_dialog)
+
         self.act_about = QAction("About", self)
         self.act_about.triggered.connect(self.show_about)
 
@@ -516,6 +521,7 @@ class MainWindow(QMainWindow):
         tools_menu = menubar.addMenu("&Tools")
         tools_menu.addAction(self.act_batch)
         tools_menu.addAction(self.act_stitch)
+        tools_menu.addAction(self.act_autostack)
 
         help_menu = menubar.addMenu("&Help")
         help_menu.addAction(self.act_about)
@@ -1027,6 +1033,13 @@ class MainWindow(QMainWindow):
         # Downloads) queued a decode of all of them for no reason. Start
         # empty; the user adds exactly the images they want via "Add Images...".
         dialog = StitchDialog(self)
+        dialog.exec()
+        self._reload_after_external_change()
+
+    def open_autostack_dialog(self) -> None:
+        # Same reasoning as Join Images: start empty rather than preloading
+        # the whole current folder.
+        dialog = AutoStackDialog(self)
         dialog.exec()
         self._reload_after_external_change()
 
