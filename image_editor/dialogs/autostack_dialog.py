@@ -27,15 +27,23 @@ from PyQt6.QtWidgets import (
 
 from ..constants import IMAGE_EXTENSIONS
 from ..core import image_ops
-from ..core.autostack_ops import MODE_FLAT, MODE_PANORAMA, AutoStackOptions
+from ..core.autostack_ops import MODE_AUTO, MODE_FLAT, MODE_PANORAMA, AutoStackOptions
 from ..core.convert import pil_to_qimage, pil_to_qpixmap
 from ..workers.autostack_worker import AutoStackWorker
 
 THUMB = 64
 
+# Auto tries both real modes and keeps whichever one manages to chain
+# together more of the photos - recommended default, since neither mode is
+# reliably better for a batch that wasn't shot as a clean, ordered scan.
 MODE_LABELS = {
+    "Auto (try both, recommended)": MODE_AUTO,
     "Overhead / flat scene (garden, field, document)": MODE_FLAT,
     "Rotating camera (classic panorama)": MODE_PANORAMA,
+}
+MODE_NAMES = {
+    MODE_FLAT: "overhead/flat",
+    MODE_PANORAMA: "rotating-camera panorama",
 }
 
 WORKING_SIZE_LABELS = {
@@ -89,7 +97,8 @@ class AutoStackDialog(QDialog):
 
         self._pool = QThreadPool.globalInstance()
         self._worker: AutoStackWorker | None = None
-        self._result = None  # PIL.Image.Image | None
+        self._result = None  # AutoStackResult | None
+        self._run_paths: list[str] = []  # exact paths list the running/last worker used, in order
 
         self._build_ui()
         if initial_paths:
@@ -109,11 +118,11 @@ class AutoStackDialog(QDialog):
         left.addWidget(hint)
 
         btn_row = QHBoxLayout()
-        btn_add = QPushButton("Add Images...")
-        btn_add_folder = QPushButton("Add Folder...")
-        btn_remove = QPushButton("Remove Selected")
-        btn_clear = QPushButton("Clear")
-        for b in (btn_add, btn_add_folder, btn_remove, btn_clear):
+        self.btn_add = QPushButton("Add Images...")
+        self.btn_add_folder = QPushButton("Add Folder...")
+        self.btn_remove = QPushButton("Remove Selected")
+        self.btn_clear = QPushButton("Clear")
+        for b in (self.btn_add, self.btn_add_folder, self.btn_remove, self.btn_clear):
             btn_row.addWidget(b)
         left.addLayout(btn_row)
 
@@ -183,10 +192,10 @@ class AutoStackDialog(QDialog):
         right_container.setMinimumWidth(280)
         root.addWidget(right_container, stretch=1)
 
-        btn_add.clicked.connect(self._add_files_dialog)
-        btn_add_folder.clicked.connect(self._add_folder_dialog)
-        btn_remove.clicked.connect(self._remove_selected)
-        btn_clear.clicked.connect(self._clear_all)
+        self.btn_add.clicked.connect(self._add_files_dialog)
+        self.btn_add_folder.clicked.connect(self._add_folder_dialog)
+        self.btn_remove.clicked.connect(self._remove_selected)
+        self.btn_clear.clicked.connect(self._clear_all)
         self.btn_run.clicked.connect(self._run_stitch)
         self.btn_cancel.clicked.connect(self._cancel_stitch)
         self.btn_save.clicked.connect(self._save_as)
@@ -277,6 +286,12 @@ class AutoStackDialog(QDialog):
         self.mode_combo.setEnabled(not busy)
         self.size_combo.setEnabled(not busy)
         self.btn_save.setEnabled(not busy and self._result is not None)
+        # The list must not change while a run is in flight: AutoStackResult
+        # reports which photos were used as indices into the exact path list
+        # the worker was given, so adding/removing/reordering mid-run would
+        # make those indices point at the wrong files afterwards.
+        for w in (self.btn_add, self.btn_add_folder, self.btn_remove, self.btn_clear, self.list_widget):
+            w.setEnabled(not busy)
 
     def _run_stitch(self) -> None:
         paths = self._ordered_paths()
@@ -288,7 +303,9 @@ class AutoStackDialog(QDialog):
         max_dim = WORKING_SIZE_LABELS[self.size_combo.currentText()]
         options = AutoStackOptions(mode=mode, max_working_dim=max_dim)
 
+        self._run_paths = paths
         self._result = None
+        self._clear_dropped_markers()
         self.preview_label.setText("")
         self.preview_label.setPixmap(QPixmap())
         self.status_label.setText(f"Loading 0 / {len(paths)} photos...")
@@ -321,8 +338,25 @@ class AutoStackDialog(QDialog):
     def _on_stitch_done(self, result) -> None:
         self._result = result
         self._set_busy(False)
-        self.status_label.setText(f"Done - {result.width} x {result.height} px")
+        img = result.image
+        mode_name = MODE_NAMES.get(result.mode_used, result.mode_used)
+        self.status_label.setText(
+            f"Done ({mode_name} mode) - {img.width} x {img.height} px, "
+            f"used {result.used_count} / {result.total_count} photos"
+        )
+        self._mark_dropped_photos(result)
         self._render_preview()
+        if result.dropped_count:
+            QMessageBox.warning(
+                self, "Auto-Stack",
+                f"Only {result.used_count} of {result.total_count} photos could be "
+                f"matched and included - the other {result.dropped_count} didn't overlap "
+                "confidently enough with the rest and were left out (marked in the list "
+                "on the left).\n\n"
+                "The result below only covers the photos that were used. To cover "
+                "everything, try removing the marked-out photos and re-running, or "
+                "stitch in smaller overlapping groups and join those."
+            )
 
     def _on_stitch_failed(self, message: str) -> None:
         self._result = None
@@ -331,10 +365,29 @@ class AutoStackDialog(QDialog):
         self.preview_label.setText("Add photos, then click Auto-Stack")
         QMessageBox.warning(self, "Auto-Stack", message)
 
+    def _clear_dropped_markers(self) -> None:
+        for i in range(self.list_widget.count()):
+            item = self.list_widget.item(i)
+            path = item.data(Qt.ItemDataRole.UserRole)
+            item.setText(Path(path).name)
+            item.setForeground(self.list_widget.palette().text())
+
+    def _mark_dropped_photos(self, result) -> None:
+        used_paths = {self._run_paths[i] for i in result.used_indices}
+        for i in range(self.list_widget.count()):
+            item = self.list_widget.item(i)
+            path = item.data(Qt.ItemDataRole.UserRole)
+            if path in self._run_paths and path not in used_paths:
+                item.setText(f"{Path(path).name}  (not used)")
+                item.setForeground(Qt.GlobalColor.darkGray)
+            else:
+                item.setText(Path(path).name)
+                item.setForeground(self.list_widget.palette().text())
+
     def _render_preview(self) -> None:
         if self._result is None:
             return
-        pixmap = pil_to_qpixmap(self._result)
+        pixmap = pil_to_qpixmap(self._result.image)
         scaled = pixmap.scaled(
             self.preview_label.width() - 10, self.preview_label.height() - 10,
             Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation,
@@ -356,12 +409,12 @@ class AutoStackDialog(QDialog):
             return
         try:
             ext = Path(path).suffix.lower()
-            result = self._result
+            image = self._result.image
             if ext in (".jpg", ".jpeg"):
-                result = result.convert("RGB")
-                result.save(path, quality=95, optimize=True)
+                image = image.convert("RGB")
+                image.save(path, quality=95, optimize=True)
             else:
-                result.save(path)
+                image.save(path)
         except Exception as exc:  # noqa: BLE001
             QMessageBox.critical(self, "Auto-Stack", f"Could not save the image:\n{exc}")
             return
