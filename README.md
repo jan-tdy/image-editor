@@ -50,11 +50,30 @@ A fast, IrfanView-style image and video viewer/editor built with PyQt6.
     color or transparent background, and size normalization (match the
     smallest/largest image, or a custom size).
   - Debounced live preview, then Save As in any common format.
+- **Auto-Stack / Smart Stitch** (`Tools → Auto-Stack (Smart Stitch)...`,
+  Ctrl+Shift+J) — combine many overlapping photos of the same scene (e.g.
+  dozens of garden shots taken from different spots above) into one large
+  image, by matching visual patterns between photos rather than placing them
+  on a fixed layout:
+  - Add individual files or a whole folder; a background pass does the
+    feature matching, alignment and blending (OpenCV's `Stitcher`), with
+    per-file load progress and a busy indicator while it aligns/blends.
+  - **Scene type**: "Overhead / flat scene" (recommended for anything shot
+    from above — a garden, a field, a document) or "Rotating camera" for a
+    classic panorama shot by turning on the spot.
+  - **Working size** caps the resolution used for matching/blending (lower
+    = faster and lighter on memory; "Full resolution" is slow and can use a
+    lot of RAM with many large photos).
+  - On failure (not enough overlap/detail between photos) it reports why,
+    instead of crashing — try the other scene type or add more overlap
+    between shots.
 
 ## Requirements
 
 - Python 3.10+
-- `PyQt6`, `Pillow`, `send2trash` (see `requirements.txt`)
+- `PyQt6`, `Pillow`, `send2trash`, `opencv-python-headless` (see
+  `requirements.txt`) — OpenCV is only used for Auto-Stack's feature
+  matching.
 - For video playback, Qt's multimedia backend needs its usual system codec
   libraries (e.g. `ffmpeg`/`gstreamer` plugins) — the app runs fine without
   them, just without video playback.
@@ -86,6 +105,7 @@ python3 main.py
 | Slideshow | F5 |
 | Batch Rename & Edit | Ctrl+B |
 | Join Images | Ctrl+J |
+| Auto-Stack (Smart Stitch) | Ctrl+Shift+J |
 
 ## Project layout
 
@@ -100,6 +120,7 @@ image_editor/
     convert.py                PIL <-> Qt pixmap conversion
     rename_ops.py             batch rename pattern engine
     stitch_ops.py              image-joining/composition engine
+    autostack_ops.py           feature-matching stitch engine (OpenCV)
   models/
     file_model.py             folder listing & navigation
   widgets/
@@ -109,9 +130,11 @@ image_editor/
     adjustments_panel.py       brightness/contrast/RGB sliders
   workers/
     batch_worker.py             background batch rename/convert/resize/adjust
+    autostack_worker.py         background Auto-Stack load + stitch
   dialogs/
     batch_dialog.py              Batch Rename & Edit dialog
     stitch_dialog.py             Join Images dialog
+    autostack_dialog.py          Auto-Stack (Smart Stitch) dialog
 ```
 
 ## Set as the system default image viewer (Linux)
