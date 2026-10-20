@@ -2,6 +2,9 @@
 
 A fast, IrfanView-style image and video viewer/editor built with PyQt6.
 
+<img width="1406" height="949" alt="image" src="https://github.com/user-attachments/assets/cd2b490c-3ab3-4173-8f40-ad1e6a92a30a" />
+
+
 ## Part 1 — viewer & editor core
 
 - **Browser** — open a folder and browse its images and videos as a
