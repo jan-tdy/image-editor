@@ -129,6 +129,21 @@ def _resolve_out_path(job: BatchFileJob, settings: BatchSettings) -> Path:
     return src.parent / name
 
 
+def _reserve_backup_path(src: Path) -> Path:
+    """Reserve the first unused .bak name without replacing an older backup."""
+    base = src.with_suffix(src.suffix + ".bak")
+    index = 0
+    while True:
+        candidate = base if index == 0 else base.with_name(f"{base.name}{index}")
+        try:
+            fd = os.open(candidate, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+        except FileExistsError:
+            index += 1
+            continue
+        os.close(fd)
+        return candidate
+
+
 def process_one(job: BatchFileJob, settings: BatchSettings) -> BatchLogEntry:
     """Process one file, returning a log entry instead of raising file errors."""
     src = Path(job.src_path)
@@ -148,6 +163,8 @@ def process_one(job: BatchFileJob, settings: BatchSettings) -> BatchLogEntry:
                 shutil.copy2(src, out_path)
                 entry.mode = "copied"
             else:
+                if out_path.exists():
+                    raise FileExistsError(f"{out_path} already exists")
                 os.rename(src, out_path)
                 entry.mode = "renamed"
             return entry
@@ -182,8 +199,12 @@ def process_one(job: BatchFileJob, settings: BatchSettings) -> BatchLogEntry:
 
         if not rename_or_move:
             if settings.backup_before_overwrite:
-                backup_path = src.with_suffix(src.suffix + ".bak")
-                shutil.copy2(src, backup_path)
+                backup_path = _reserve_backup_path(src)
+                try:
+                    shutil.copy2(src, backup_path)
+                except Exception:
+                    backup_path.unlink(missing_ok=True)
+                    raise
                 entry.backup_path = str(backup_path)
             _save_image(image, out_path, settings.jpeg_quality)
             entry.mode = "overwritten"
@@ -192,8 +213,12 @@ def process_one(job: BatchFileJob, settings: BatchSettings) -> BatchLogEntry:
                 raise FileExistsError(f"{out_path} already exists")
             _save_image(image, out_path, settings.jpeg_quality)
             if settings.backup_before_overwrite:
-                backup_path = src.with_suffix(src.suffix + ".bak")
-                os.replace(src, backup_path)
+                backup_path = _reserve_backup_path(src)
+                try:
+                    os.replace(src, backup_path)
+                except Exception:
+                    backup_path.unlink(missing_ok=True)
+                    raise
                 entry.backup_path = str(backup_path)
             else:
                 os.remove(src)
