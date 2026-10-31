@@ -403,7 +403,7 @@ class AutoStackDialog(QDialog):
             return
         path, _ = QFileDialog.getSaveFileName(
             self, "Save Stitched Image", "autostack.jpg",
-            "JPEG (*.jpg *.jpeg);;PNG (*.png);;TIFF (*.tiff);;WEBP (*.webp)",
+            "JPEG (*.jpg *.jpeg);;PNG (*.png);;TIFF (*.tif *.tiff);;WEBP (*.webp)",
         )
         if not path:
             return

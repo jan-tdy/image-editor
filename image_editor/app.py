@@ -29,6 +29,7 @@ from PyQt6.QtWidgets import (
     QStatusBar,
     QStyle,
     QToolBar,
+    QVBoxLayout,
     QWidget,
 )
 
@@ -40,16 +41,22 @@ from .dialogs.batch_dialog import BatchDialog
 from .dialogs.stitch_dialog import StitchDialog
 from .models.file_model import FolderNavigator
 from .widgets.adjustments_panel import AdjustmentsPanel
+from .widgets.gif_transport import GifTransportBar
 from .widgets.image_view import ImageView
 from .widgets.thumbnail_panel import ThumbnailPanel
 from .widgets.video_view import MULTIMEDIA_AVAILABLE, VideoView
+
+# Pillow reports some GIFs with duration=0 ("as fast as possible"); replaying
+# those at the UI timer's natural speed would busy-loop the event loop, so
+# playback is floored at this interval regardless of the encoded duration.
+GIF_MIN_FRAME_MS = 20
 
 try:
     from send2trash import send2trash
 except Exception:  # pragma: no cover - optional dependency
     send2trash = None
 
-SAVE_FILTERS = "JPEG (*.jpg *.jpeg);;PNG (*.png);;BMP (*.bmp);;TIFF (*.tiff);;WEBP (*.webp)"
+SAVE_FILTERS = "JPEG (*.jpg *.jpeg);;PNG (*.png);;BMP (*.bmp);;TIFF (*.tif *.tiff);;WEBP (*.webp);;GIF (*.gif)"
 SLIDESHOW_INTERVALS = {"2 seconds": 2, "3 seconds": 3, "5 seconds": 5, "10 seconds": 10}
 
 # The app previously carried no stylesheet at all, so toolbar buttons,
@@ -113,6 +120,11 @@ class MainWindow(QMainWindow):
         self.slideshow_timer = QTimer(self)
         self.slideshow_timer.timeout.connect(self._slideshow_step)
         self.slideshow_interval_s = 3
+
+        self.gif_timer = QTimer(self)
+        self.gif_timer.setSingleShot(True)
+        self.gif_timer.timeout.connect(self._gif_advance_frame)
+        self._gif_playing = False
 
         # Adjustment sliders emit valueChanged continuously while dragging,
         # each of which redoes the full-resolution PIL pass; recomputing on
@@ -178,7 +190,19 @@ class MainWindow(QMainWindow):
         self.stack = QStackedWidget()
         self.stack.addWidget(self.image_view)
         self.stack.addWidget(self.video_view)
-        self.setCentralWidget(self.stack)
+
+        self.gif_bar = GifTransportBar()
+        self.gif_bar.playToggled.connect(self._on_gif_play_toggled)
+        self.gif_bar.frameChanged.connect(self._on_gif_frame_changed)
+        self.gif_bar.hide()
+
+        central = QWidget()
+        central_layout = QVBoxLayout(central)
+        central_layout.setContentsMargins(0, 0, 0, 0)
+        central_layout.setSpacing(0)
+        central_layout.addWidget(self.stack, stretch=1)
+        central_layout.addWidget(self.gif_bar)
+        self.setCentralWidget(central)
 
     def _build_docks(self) -> None:
         self.thumbnail_panel = ThumbnailPanel()
@@ -651,12 +675,21 @@ class MainWindow(QMainWindow):
         self.stack.setCurrentWidget(self.image_view)
         self.document = ImageDocument(path)
         self.adjustments_panel.set_values(brightness=0, contrast=0, saturation=0, red=0, green=0, blue=0)
+        self._stop_gif_playback()
+        if self.document.is_animated:
+            self.gif_bar.show()
+            self.gif_bar.configure(self.document.frame_count)
+            self._start_gif_playback()
+        else:
+            self.gif_bar.hide()
         self.refresh_view()
         self._update_status(path)
 
     def _open_video(self, path: str) -> None:
         self.document = None
         self.is_video = True
+        self._stop_gif_playback()
+        self.gif_bar.hide()
         self.stack.setCurrentWidget(self.video_view)
         self.video_view.load(path)
         self._update_status(path, is_video=True)
@@ -666,11 +699,49 @@ class MainWindow(QMainWindow):
             self.video_view.stop_and_release()
         self.document = None
         self.is_video = False
+        self._stop_gif_playback()
+        self.gif_bar.hide()
         self.image_view.clear()
         self.path_label.setText("No file open")
         self.size_label.setText("")
         self.zoom_label.setText("")
         self.setWindowTitle(APP_NAME)
+
+    # -- animated GIF playback -------------------------------------------------
+    def _start_gif_playback(self) -> None:
+        self._gif_playing = True
+        self.gif_bar.set_playing(True)
+        duration = self.document.frame_durations[self.document.current_frame_index]
+        self.gif_timer.start(max(GIF_MIN_FRAME_MS, duration))
+
+    def _stop_gif_playback(self) -> None:
+        self._gif_playing = False
+        self.gif_timer.stop()
+        self.gif_bar.set_playing(False)
+
+    def _gif_advance_frame(self) -> None:
+        if self.document is None or not self._gif_playing or not self.document.is_animated:
+            return
+        next_index = (self.document.current_frame_index + 1) % self.document.frame_count
+        self.document.set_current_frame(next_index)
+        self.refresh_view(recenter=False)
+        duration = self.document.frame_durations[next_index]
+        self.gif_timer.start(max(GIF_MIN_FRAME_MS, duration))
+
+    def _on_gif_play_toggled(self, playing: bool) -> None:
+        if self.document is None or not self.document.is_animated:
+            return
+        if playing:
+            self._start_gif_playback()
+        else:
+            self._stop_gif_playback()
+
+    def _on_gif_frame_changed(self, index: int) -> None:
+        if self.document is None or not self.document.is_animated:
+            return
+        self._stop_gif_playback()
+        self.document.set_current_frame(index)
+        self.refresh_view(recenter=False)
 
     def _update_status(self, path: str, is_video: bool = False) -> None:
         self.path_label.setText(path)
@@ -700,6 +771,8 @@ class MainWindow(QMainWindow):
         self.image_view.set_pixmap(pixmap, recenter=recenter)
         w, h = self.document.size
         self.size_label.setText(f"{w} x {h}px")
+        if self.document.is_animated:
+            self.gif_bar.set_frame(self.document.current_frame_index, self.document.frame_count)
         self._update_actions_enabled()
 
     def _on_zoom_changed(self, zoom: float) -> None:
@@ -780,6 +853,7 @@ class MainWindow(QMainWindow):
             self.act_crop.setChecked(False)
             return
         if checked:
+            self._stop_gif_playback()
             self.image_view.enter_crop_mode()
         else:
             self.image_view.exit_crop_mode()
@@ -809,7 +883,9 @@ class MainWindow(QMainWindow):
 
     def _on_adjust_dock_visibility(self, visible: bool) -> None:
         self.act_adjustments.setChecked(visible)
-        if not visible and self.document is not None:
+        if visible:
+            self._stop_gif_playback()
+        elif self.document is not None:
             self.document.reset_adjustments()
             self.refresh_view()
 
@@ -847,13 +923,19 @@ class MainWindow(QMainWindow):
         # smaller-looking value.
         self.adjustments_panel.set_values(brightness=0, contrast=0, saturation=0, red=0, green=0, blue=0)
 
+    def _save_message(self, path: str, was_animated: bool) -> str:
+        if was_animated and Path(path).suffix.lower() != ".gif":
+            return f"Saved current frame only (animation not preserved) to {path}"
+        return f"Saved {path}"
+
     def save_current(self) -> None:
         if not self._guard_image():
             return
         try:
+            was_animated = self.document.is_animated
             self.document.save()
             self._sync_adjustments_panel_after_save()
-            self.statusBar().showMessage(f"Saved {self.document.path}", 3000)
+            self.statusBar().showMessage(self._save_message(self.document.path, was_animated), 4000)
         except Exception as exc:  # noqa: BLE001
             QMessageBox.critical(self, "Save failed", str(exc))
 
@@ -865,9 +947,10 @@ class MainWindow(QMainWindow):
         if not path:
             return
         try:
+            was_animated = self.document.is_animated
             self.document.save(path)
             self._sync_adjustments_panel_after_save()
-            self.statusBar().showMessage(f"Saved {path}", 3000)
+            self.statusBar().showMessage(self._save_message(path, was_animated), 4000)
             self.navigator.refresh()
             self.navigator.select(path)
             self._suspend_thumb_sync = True

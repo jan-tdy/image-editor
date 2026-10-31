@@ -2,7 +2,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from PIL import Image
+from PIL import Image, ImageSequence
 
 from image_editor.core.image_document import Adjustments, ImageDocument, MAX_UNDO_DEPTH
 
@@ -118,6 +118,105 @@ class ImageDocumentTests(unittest.TestCase):
             document.preview_image()
         with self.assertRaises(RuntimeError):
             document.save(str(Path(self.tempdir.name) / "out.png"))
+
+
+class AnimatedGifDocumentTests(unittest.TestCase):
+    def setUp(self):
+        self.tempdir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tempdir.cleanup)
+        self.path = Path(self.tempdir.name) / "anim.gif"
+        frames = [
+            Image.new("RGB", (4, 2), (255, 0, 0)),
+            Image.new("RGB", (4, 2), (0, 255, 0)),
+            Image.new("RGB", (4, 2), (0, 0, 255)),
+        ]
+        # Durations must be multiples of 10ms: the GIF format stores timing
+        # in centiseconds, so anything finer gets silently rounded on save.
+        frames[0].save(
+            self.path,
+            save_all=True,
+            append_images=frames[1:],
+            duration=[50, 70, 100],
+            loop=0,
+        )
+
+    def test_load_reads_every_frame_with_its_duration(self):
+        document = ImageDocument(str(self.path))
+        self.assertTrue(document.is_animated)
+        self.assertEqual(document.frame_count, 3)
+        self.assertEqual(document.frame_durations, [50, 70, 100])
+        self.assertEqual(document.current_frame_index, 0)
+        self.assertEqual(document.base_image.getpixel((0, 0))[:3], (255, 0, 0))
+
+    def test_set_current_frame_switches_the_displayed_frame(self):
+        document = ImageDocument(str(self.path))
+        document.set_current_frame(1)
+        self.assertEqual(document.current_frame_index, 1)
+        self.assertEqual(document.base_image.getpixel((0, 0))[:3], (0, 255, 0))
+
+    def test_set_current_frame_clamps_out_of_range_indices(self):
+        document = ImageDocument(str(self.path))
+        document.set_current_frame(99)
+        self.assertEqual(document.current_frame_index, 2)
+        document.set_current_frame(-5)
+        self.assertEqual(document.current_frame_index, 0)
+
+    def test_rotate_applies_to_every_frame_and_is_undoable(self):
+        document = ImageDocument(str(self.path))
+        document.rotate90()
+        self.assertEqual(document.size, (2, 4))
+        for frame in document.frames:
+            self.assertEqual(frame.size, (2, 4))
+
+        self.assertTrue(document.undo())
+        self.assertEqual(document.size, (4, 2))
+        for frame in document.frames:
+            self.assertEqual(frame.size, (4, 2))
+
+    def test_commit_adjustments_bakes_into_every_frame(self):
+        document = ImageDocument(str(self.path))
+        originals = [frame.copy() for frame in document.frames]
+        document.set_adjustments(brightness=-100)
+        self.assertTrue(document.commit_adjustments())
+        # Every frame should be darkened, not just the one that happened to
+        # be on screen when the adjustment was committed.
+        for frame, original in zip(document.frames, originals):
+            self.assertNotEqual(list(frame.getdata()), list(original.getdata()))
+
+    def test_save_as_gif_round_trips_frames_and_durations(self):
+        document = ImageDocument(str(self.path))
+        document.rotate90()
+        out_path = Path(self.tempdir.name) / "out.gif"
+
+        document.save(str(out_path))
+
+        with Image.open(out_path) as saved:
+            self.assertTrue(saved.is_animated)
+            self.assertEqual(saved.n_frames, 3)
+            durations = []
+            for frame in ImageSequence.Iterator(saved):
+                durations.append(frame.info.get("duration"))
+            self.assertEqual(durations, [50, 70, 100])
+        self.assertFalse(document.dirty)
+
+    def test_save_as_png_exports_only_the_current_frame(self):
+        document = ImageDocument(str(self.path))
+        document.set_current_frame(1)
+        out_path = Path(self.tempdir.name) / "frame.png"
+
+        document.save(str(out_path))
+
+        with Image.open(out_path) as saved:
+            self.assertFalse(getattr(saved, "is_animated", False))
+            self.assertEqual(saved.convert("RGB").getpixel((0, 0)), (0, 255, 0))
+
+    def test_revert_to_original_restores_all_frames(self):
+        document = ImageDocument(str(self.path))
+        document.rotate90()
+        document.revert_to_original()
+        self.assertEqual(document.size, (4, 2))
+        self.assertEqual(document.frame_count, 3)
+        self.assertEqual(document.base_image.getpixel((0, 0))[:3], (255, 0, 0))
 
 
 if __name__ == "__main__":

@@ -48,6 +48,7 @@ FORMAT_CHOICES = {
     "BMP": ".bmp",
     "TIFF": ".tiff",
     "WEBP": ".webp",
+    "GIF": ".gif",
 }
 
 CASE_CHOICES = {
