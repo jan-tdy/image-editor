@@ -387,7 +387,7 @@ class StitchDialog(QDialog):
 
         path, _ = QFileDialog.getSaveFileName(
             self, "Save Joined Image", "joined.png",
-            "PNG (*.png);;JPEG (*.jpg *.jpeg);;BMP (*.bmp);;TIFF (*.tiff);;WEBP (*.webp)",
+            "PNG (*.png);;JPEG (*.jpg *.jpeg);;BMP (*.bmp);;TIFF (*.tif *.tiff);;WEBP (*.webp)",
         )
         if not path:
             return

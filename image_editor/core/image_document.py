@@ -12,11 +12,12 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 from pathlib import Path
 
-from PIL import Image
+from PIL import Image, ImageSequence
 
 from . import image_ops
 
 MAX_UNDO_DEPTH = 25
+DEFAULT_FRAME_DURATION_MS = 100
 
 
 @dataclass(frozen=True)
@@ -39,8 +40,20 @@ class ImageDocument:
         self.base_image: Image.Image | None = None
         self.adjustments = Adjustments()
 
-        self._undo_stack: list[Image.Image] = []
-        self._redo_stack: list[Image.Image] = []
+        # Animated-GIF state. ``frames`` is None for an ordinary still image;
+        # when set, it holds every frame (each the same size as base_image)
+        # and base_image always mirrors frames[current_frame_index], so every
+        # existing single-image code path (preview_image, size, ...) keeps
+        # working unchanged against "the currently displayed frame".
+        self.frames: list[Image.Image] | None = None
+        self.original_frames: list[Image.Image] | None = None
+        self.frame_durations: list[int] = []
+        self.frame_disposal: list[int] = []
+        self.loop_count = 0
+        self.current_frame_index = 0
+
+        self._undo_stack: list[Image.Image | list[Image.Image]] = []
+        self._redo_stack: list[Image.Image | list[Image.Image]] = []
         self._preview_cache: Image.Image | None = None
         self._preview_cache_key: Adjustments | None = None
         self.dirty = False
@@ -48,20 +61,82 @@ class ImageDocument:
         if path:
             self.load(path)
 
+    @property
+    def is_animated(self) -> bool:
+        return bool(self.frames and len(self.frames) > 1)
+
+    @property
+    def frame_count(self) -> int:
+        return len(self.frames) if self.frames else 1
+
     # -- loading / saving -------------------------------------------------
     def load(self, path: str) -> None:
         """Load an image with EXIF orientation applied and reset all edit state."""
+        raw = Image.open(path)
+        if getattr(raw, "is_animated", False) and getattr(raw, "n_frames", 1) > 1:
+            self._load_animated(raw, path)
+            return
+
         image = image_ops.load_with_orientation(path)
         if image.mode not in ("RGB", "RGBA"):
             image = image.convert("RGBA" if "transparency" in image.info or image.mode in ("P", "LA") else "RGB")
         self.path = str(path)
         self.original = image
         self.base_image = image.copy()
+        self.frames = None
+        self.original_frames = None
+        self.frame_durations = []
+        self.frame_disposal = []
+        self.loop_count = 0
+        self.current_frame_index = 0
         self.adjustments = Adjustments()
         self._undo_stack.clear()
         self._redo_stack.clear()
         self._invalidate_preview()
         self.dirty = False
+
+    def _load_animated(self, raw: Image.Image, path: str) -> None:
+        """Load every frame of an animated GIF (or other multi-frame format
+        Pillow reports as animated), keeping each frame's duration/disposal
+        so :meth:`save` can round-trip the animation."""
+        frames: list[Image.Image] = []
+        durations: list[int] = []
+        disposals: list[int] = []
+        for frame in ImageSequence.Iterator(raw):
+            frames.append(frame.convert("RGBA"))
+            durations.append(frame.info.get("duration") or DEFAULT_FRAME_DURATION_MS)
+            disposals.append(getattr(frame, "disposal_method", 2))
+
+        self.path = str(path)
+        self.frames = frames
+        self.original_frames = [f.copy() for f in frames]
+        self.frame_durations = durations
+        self.frame_disposal = disposals
+        self.loop_count = raw.info.get("loop", 0)
+        self.current_frame_index = 0
+        self.original = frames[0].copy()
+        self.base_image = frames[0].copy()
+        self.adjustments = Adjustments()
+        self._undo_stack.clear()
+        self._redo_stack.clear()
+        self._invalidate_preview()
+        self.dirty = False
+
+    def set_current_frame(self, index: int) -> None:
+        """Switch the displayed/editable frame of an animated document.
+
+        Bakes any pending live adjustments into the frame being left first,
+        same as switching away via a geometric edit would.
+        """
+        if not self.frames:
+            return
+        index = max(0, min(index, len(self.frames) - 1))
+        if index == self.current_frame_index:
+            return
+        self.commit_adjustments()
+        self.current_frame_index = index
+        self.base_image = self.frames[index]
+        self._invalidate_preview()
 
     def save(self, path: str | None = None, quality: int = 95) -> str:
         """Bake pending adjustments, save the image, and mark the document clean.
@@ -81,8 +156,26 @@ class ImageDocument:
         # diverge the displayed image from the saved file while `dirty`
         # still read False.
         self.commit_adjustments()
-        image = self.preview_image()
         ext = Path(target).suffix.lower()
+
+        if self.is_animated and ext == ".gif":
+            self.frames[0].save(
+                target,
+                format="GIF",
+                save_all=True,
+                append_images=self.frames[1:],
+                duration=self.frame_durations,
+                disposal=self.frame_disposal,
+                loop=self.loop_count,
+            )
+            self.path = target
+            self.dirty = False
+            return target
+
+        # Either a still image, or exporting one frame of an animated
+        # document to a non-animated format - only the currently displayed
+        # frame is written in that case.
+        image = self.preview_image()
         save_kwargs = {}
         if ext in (".jpg", ".jpeg"):
             image = image.convert("RGB")
@@ -141,16 +234,47 @@ class ImageDocument:
         if self.adjustments.is_identity():
             return False
         self._push_undo()
-        self.base_image = self.preview_image()
+        if self.is_animated:
+            # Adjustments are previewed live on just the current frame (cheap,
+            # for smooth slider dragging) but baked into every frame on
+            # commit, so the exported animation stays consistent across frames.
+            self.frames = [
+                image_ops.apply_adjustments(
+                    frame,
+                    brightness=self.adjustments.brightness,
+                    contrast=self.adjustments.contrast,
+                    saturation=self.adjustments.saturation,
+                    red=self.adjustments.red,
+                    green=self.adjustments.green,
+                    blue=self.adjustments.blue,
+                )
+                for frame in self.frames
+            ]
+            self.base_image = self.frames[self.current_frame_index]
+        else:
+            self.base_image = self.preview_image()
         self.adjustments = Adjustments()
         self._invalidate_preview()
         self.dirty = True
         return True
 
     # -- geometric edits (each is its own undo step) -------------------------
+    def _snapshot(self) -> Image.Image | list[Image.Image]:
+        if self.is_animated:
+            return [frame.copy() for frame in self.frames]
+        return self.base_image.copy()
+
+    def _restore(self, snapshot: Image.Image | list[Image.Image]) -> None:
+        if isinstance(snapshot, list):
+            self.frames = snapshot
+            self.current_frame_index = min(self.current_frame_index, len(self.frames) - 1)
+            self.base_image = self.frames[self.current_frame_index]
+        else:
+            self.base_image = snapshot
+
     def _push_undo(self) -> None:
         assert self.base_image is not None
-        self._undo_stack.append(self.base_image.copy())
+        self._undo_stack.append(self._snapshot())
         if len(self._undo_stack) > MAX_UNDO_DEPTH:
             self._undo_stack.pop(0)
         self._redo_stack.clear()
@@ -160,7 +284,14 @@ class ImageDocument:
             return
         self.commit_adjustments()
         self._push_undo()
-        self.base_image = fn(self.base_image)
+        if self.is_animated:
+            # Geometric edits apply to every frame so the whole animation
+            # stays in sync (e.g. rotating a GIF rotates all of it, not just
+            # whichever frame happened to be on screen).
+            self.frames = [fn(frame) for frame in self.frames]
+            self.base_image = self.frames[self.current_frame_index]
+        else:
+            self.base_image = fn(self.base_image)
         self._invalidate_preview()
         self.dirty = True
 
@@ -194,8 +325,8 @@ class ImageDocument:
         """Restore the previous baked image and report whether one existed."""
         if not self._undo_stack or self.base_image is None:
             return False
-        self._redo_stack.append(self.base_image.copy())
-        self.base_image = self._undo_stack.pop()
+        self._redo_stack.append(self._snapshot())
+        self._restore(self._undo_stack.pop())
         self.adjustments = Adjustments()
         self._invalidate_preview()
         self.dirty = True
@@ -205,8 +336,8 @@ class ImageDocument:
         """Restore the next baked image and report whether one existed."""
         if not self._redo_stack or self.base_image is None:
             return False
-        self._undo_stack.append(self.base_image.copy())
-        self.base_image = self._redo_stack.pop()
+        self._undo_stack.append(self._snapshot())
+        self._restore(self._redo_stack.pop())
         self.adjustments = Adjustments()
         self._invalidate_preview()
         self.dirty = True
@@ -217,7 +348,12 @@ class ImageDocument:
         if self.original is None:
             return
         self._push_undo()
-        self.base_image = self.original.copy()
+        if self.original_frames is not None:
+            self.frames = [frame.copy() for frame in self.original_frames]
+            self.current_frame_index = min(self.current_frame_index, len(self.frames) - 1)
+            self.base_image = self.frames[self.current_frame_index]
+        else:
+            self.base_image = self.original.copy()
         self.adjustments = Adjustments()
         self._invalidate_preview()
         self.dirty = True

@@ -174,6 +174,8 @@ class MainWindowRegressionTests(unittest.TestCase):
             is_video=True,
             video_view=video_view,
             image_view=Mock(),
+            gif_bar=Mock(),
+            _stop_gif_playback=Mock(),
             path_label=Mock(),
             size_label=Mock(),
             zoom_label=Mock(),
@@ -184,6 +186,7 @@ class MainWindowRegressionTests(unittest.TestCase):
         self.assertIsNone(window.document)
         self.assertFalse(window.is_video)
         window.image_view.clear.assert_called_once_with()
+        window.gif_bar.hide.assert_called_once_with()
 
     def test_open_folder_does_nothing_when_dirty_guard_is_cancelled(self):
         window = SimpleNamespace(
