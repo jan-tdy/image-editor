@@ -33,6 +33,11 @@ from PyQt6.QtWidgets import (
 from ..constants import IMAGE_EXTENSIONS, VIDEO_EXTENSIONS
 from ..core.rename_ops import RenamePlan, RenameResult, preview_names
 from ..widgets.adjustments_panel import AdjustSlider
+from ..workers.batch_journal import (
+    has_undoable_entries,
+    journal_directory,
+    write_journal,
+)
 from ..workers.batch_worker import (
     BatchFileJob,
     BatchSettings,
@@ -69,6 +74,13 @@ class BatchDialog(QDialog):
         self.resize(980, 640)
         self._worker: BatchWorker | None = None
         self._last_log = None
+        self._run_jobs: list | None = None
+        self._run_settings: BatchSettings | None = None
+        # Set when the most recent finished run changed files. ``last_journal_path``
+        # is None if writing the journal failed, so the caller can tell that
+        # the run is not undoable from disk.
+        self.last_run_changed_files = False
+        self.last_journal_path: Path | None = None
 
         self._build_ui()
         if initial_paths:
@@ -290,6 +302,15 @@ class BatchDialog(QDialog):
         self.backup_check.setChecked(True)
         layout.addWidget(self.backup_check)
 
+        self.keep_metadata_check = QCheckBox("Keep EXIF metadata and ICC colour profile in re-encoded files")
+        self.keep_metadata_check.setChecked(True)
+        self.keep_metadata_check.setToolTip(
+            "Applies to files that are re-encoded (resized, converted, adjusted or rotated). "
+            "Renamed or copied files always keep their metadata. The orientation tag is reset "
+            "because pixels are already upright."
+        )
+        layout.addWidget(self.keep_metadata_check)
+
         btn_browse.clicked.connect(self._browse_output_folder)
         self.radio_overwrite.toggled.connect(lambda checked: self.backup_check.setEnabled(True))
         return box
@@ -469,6 +490,7 @@ class BatchDialog(QDialog):
             output_mode="folder" if self.radio_folder.isChecked() else "overwrite",
             output_folder=self.folder_edit.text(),
             backup_before_overwrite=self.backup_check.isChecked(),
+            keep_metadata=self.keep_metadata_check.isChecked(),
         )
 
     def _build_jobs(self, settings: BatchSettings) -> list[BatchFileJob] | None:
@@ -508,6 +530,10 @@ class BatchDialog(QDialog):
         self.btn_cancel.setEnabled(True)
         self.btn_undo.setEnabled(False)
 
+        self._run_jobs = jobs
+        self._run_settings = settings
+        self.last_run_changed_files = False
+        self.last_journal_path = None
         self._worker = BatchWorker(jobs, settings, self)
         self._worker.progress.connect(self._on_progress)
         self._worker.finishedBatch.connect(self._on_finished)
@@ -533,7 +559,18 @@ class BatchDialog(QDialog):
         self.status_label.setText(f"Done: {len(log) - len(errors)} ok, {len(errors)} failed")
         self.btn_run.setEnabled(True)
         self.btn_cancel.setEnabled(False)
-        self.btn_undo.setEnabled(any(e.mode != "noop" and e.mode != "error" for e in log))
+
+        self.last_run_changed_files = has_undoable_entries(log)
+        self.last_journal_path = None
+        if self.last_run_changed_files and self._run_jobs and self._run_settings:
+            try:
+                self.last_journal_path = write_journal(
+                    log, journal_directory(self._run_jobs, self._run_settings)
+                )
+                self.log_view.appendPlainText(f"Undo journal saved: {self.last_journal_path}")
+            except OSError as exc:
+                self.log_view.appendPlainText(f"WARNING: could not save undo journal ({exc}); undo works until this dialog closes")
+        self.btn_undo.setEnabled(self.last_run_changed_files)
 
     def _undo_last_run(self) -> None:
         if not self._last_log:
@@ -541,6 +578,9 @@ class BatchDialog(QDialog):
         if QMessageBox.question(self, "Undo Batch", "Revert the changes made by the last batch run?") != QMessageBox.StandardButton.Yes:
             return
         warnings = undo_batch(self._last_log)
+        if not warnings and self.last_journal_path is not None:
+            self.last_journal_path.unlink(missing_ok=True)
+            self.last_journal_path = None
         self.btn_undo.setEnabled(False)
         self._last_log = None
         if warnings:

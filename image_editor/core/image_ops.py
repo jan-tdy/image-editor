@@ -6,6 +6,9 @@ undo/redo or a "revert" action.
 """
 from __future__ import annotations
 
+from dataclasses import dataclass
+from pathlib import Path
+
 from PIL import Image, ImageEnhance, ImageOps
 
 
@@ -132,12 +135,102 @@ def grayscale(image: Image.Image) -> Image.Image:
     return gray.convert(image.mode) if image.mode in ("RGBA",) else gray
 
 
-def load_with_orientation(path: str) -> Image.Image:
-    """Open an image and bake any EXIF orientation into the pixel data."""
+# Pixel-geometry EXIF tags that describe the *encoded* bitmap. After rotate,
+# crop or resize they no longer match the pixels and must be rewritten.
+_TAG_ORIENTATION = 0x0112
+_TAG_IMAGE_WIDTH = 0x0100
+_TAG_IMAGE_LENGTH = 0x0101
+_IFD_EXIF = 0x8769
+_TAG_PIXEL_X_DIMENSION = 0xA002
+_TAG_PIXEL_Y_DIMENSION = 0xA003
+
+# Formats whose Pillow encoders accept ``exif=`` and ``icc_profile=``.
+METADATA_EXTENSIONS = frozenset({".jpg", ".jpeg", ".png", ".webp", ".tif", ".tiff"})
+
+
+@dataclass(frozen=True)
+class ImageMetadata:
+    """EXIF block and ICC profile carried over from a source file.
+
+    ``icc_profile`` is only captured for RGB/RGBA sources. The editor decodes
+    other modes (CMYK, grayscale, palette) to RGB without colour management,
+    so tagging that RGB output with the source profile would shift colours.
+    """
+
+    exif: bytes | None = None
+    icc_profile: bytes | None = None
+
+
+def capture_metadata(image: Image.Image) -> ImageMetadata:
+    """Read EXIF and ICC from ``image``. Call before any mode conversion."""
+    exif = image.info.get("exif") or None
+    icc = image.info.get("icc_profile") or None
+    if image.mode not in ("RGB", "RGBA"):
+        icc = None
+    return ImageMetadata(exif=exif, icc_profile=icc)
+
+
+def load_oriented_with_metadata(path: str | Path) -> tuple[Image.Image, ImageMetadata]:
+    """Open an image with EXIF orientation baked in, plus its metadata."""
     img = Image.open(path)
     img = ImageOps.exif_transpose(img)
     img.load()
-    return img
+    return img, capture_metadata(img)
+
+
+def load_with_orientation(path: str) -> Image.Image:
+    """Open an image and bake any EXIF orientation into the pixel data."""
+    return load_oriented_with_metadata(path)[0]
+
+
+def _output_exif(exif_bytes: bytes | None, size: tuple[int, int]) -> bytes:
+    """Return EXIF for an output bitmap of ``size``, or ``b""`` to omit it.
+
+    The orientation is reset to 1 because the pixels are already upright, and
+    the pixel-dimension tags are rewritten to the output size so they do not
+    describe the pre-edit bitmap.
+    """
+    if not exif_bytes:
+        return b""
+    exif = Image.Exif()
+    try:
+        exif.load(exif_bytes)
+    except Exception:  # noqa: BLE001 - an unparseable block is dropped, not fatal
+        return b""
+    width, height = size
+    exif[_TAG_ORIENTATION] = 1
+    if _TAG_IMAGE_WIDTH in exif:
+        exif[_TAG_IMAGE_WIDTH] = width
+    if _TAG_IMAGE_LENGTH in exif:
+        exif[_TAG_IMAGE_LENGTH] = height
+    if _IFD_EXIF in exif:
+        sub = exif.get_ifd(_IFD_EXIF)
+        if _TAG_PIXEL_X_DIMENSION in sub:
+            sub[_TAG_PIXEL_X_DIMENSION] = width
+        if _TAG_PIXEL_Y_DIMENSION in sub:
+            sub[_TAG_PIXEL_Y_DIMENSION] = height
+    return exif.tobytes()
+
+
+def metadata_save_kwargs(
+    metadata: ImageMetadata | None,
+    extension: str,
+    size: tuple[int, int],
+) -> dict:
+    """Pillow ``save()`` kwargs that carry ``metadata`` into an output file.
+
+    Passing ``metadata=None`` still returns explicit empty values for formats
+    that support metadata. PNG and TIFF otherwise copy ``im.info["icc_profile"]``
+    automatically, so omitting the kwarg would not strip the profile.
+    """
+    if extension.lower() not in METADATA_EXTENSIONS:
+        return {}
+    if metadata is None:
+        return {"exif": b"", "icc_profile": None}
+    return {
+        "exif": _output_exif(metadata.exif, size),
+        "icc_profile": metadata.icc_profile,
+    }
 
 
 def load_thumbnail(path: str, size: int) -> Image.Image:

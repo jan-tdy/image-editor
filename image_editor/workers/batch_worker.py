@@ -56,6 +56,10 @@ class BatchSettings:
     output_mode: str = "overwrite"  # "overwrite" | "folder"
     output_folder: str = ""
     backup_before_overwrite: bool = True
+    # Carry EXIF and the ICC profile into re-encoded files (orientation reset).
+    # Files that are only renamed or copied are never re-encoded, so they keep
+    # their metadata regardless of this flag.
+    keep_metadata: bool = True
 
     def needs_pixel_ops(self) -> bool:
         return bool(
@@ -102,7 +106,7 @@ def _apply_pixel_ops(image, settings: BatchSettings):
     return image
 
 
-def _save_image(image, out_path: Path, jpeg_quality: int) -> None:
+def _save_image(image, out_path: Path, jpeg_quality: int, metadata: image_ops.ImageMetadata | None = None) -> None:
     out_path.parent.mkdir(parents=True, exist_ok=True)
     save_kwargs = {}
     ext = out_path.suffix.lower()
@@ -112,6 +116,9 @@ def _save_image(image, out_path: Path, jpeg_quality: int) -> None:
         save_kwargs["optimize"] = True
     elif ext == ".png":
         save_kwargs["optimize"] = True
+    # metadata=None strips: explicit empty values, because PNG/TIFF would
+    # otherwise copy the source ICC profile automatically.
+    save_kwargs.update(image_ops.metadata_save_kwargs(metadata, ext, image.size))
     image.save(out_path, **save_kwargs)
 
 
@@ -187,13 +194,14 @@ def process_one(job: BatchFileJob, settings: BatchSettings) -> BatchLogEntry:
                 entry.mode = "renamed"
             return entry
 
-        image = image_ops.load_with_orientation(str(src))
+        image, metadata = image_ops.load_oriented_with_metadata(str(src))
         image = _apply_pixel_ops(image, settings)
+        save_meta = metadata if settings.keep_metadata else None
 
         if settings.output_mode == "folder":
             if out_path.exists():
                 raise FileExistsError(f"{out_path} already exists")
-            _save_image(image, out_path, settings.jpeg_quality)
+            _save_image(image, out_path, settings.jpeg_quality, save_meta)
             entry.mode = "copied"
             return entry
 
@@ -206,12 +214,12 @@ def process_one(job: BatchFileJob, settings: BatchSettings) -> BatchLogEntry:
                     backup_path.unlink(missing_ok=True)
                     raise
                 entry.backup_path = str(backup_path)
-            _save_image(image, out_path, settings.jpeg_quality)
+            _save_image(image, out_path, settings.jpeg_quality, save_meta)
             entry.mode = "overwritten"
         else:
             if out_path.exists():
                 raise FileExistsError(f"{out_path} already exists")
-            _save_image(image, out_path, settings.jpeg_quality)
+            _save_image(image, out_path, settings.jpeg_quality, save_meta)
             if settings.backup_before_overwrite:
                 backup_path = _reserve_backup_path(src)
                 try:
