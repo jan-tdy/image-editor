@@ -38,6 +38,7 @@ from .core.convert import pil_to_qpixmap
 from .core.image_document import ImageDocument
 from .dialogs.autostack_dialog import AutoStackDialog
 from .dialogs.batch_dialog import BatchDialog
+from .workers.batch_journal import undo_journal
 from .dialogs.stitch_dialog import StitchDialog
 from .models.file_model import FolderNavigator
 from .widgets.adjustments_panel import AdjustmentsPanel
@@ -102,6 +103,9 @@ QListWidget::item:selected {
     color: palette(highlighted-text);
 }
 """
+
+
+LAST_BATCH_JOURNAL_KEY = "batch/last_journal"
 
 
 class MainWindow(QMainWindow):
@@ -474,6 +478,14 @@ class MainWindow(QMainWindow):
         self.act_batch.setShortcut("Ctrl+B")
         self.act_batch.triggered.connect(self.open_batch_dialog)
 
+        self.act_undo_batch = QAction("Undo Last Batch...", self)
+        self.act_undo_batch.triggered.connect(self.undo_last_batch)
+
+        self.act_keep_metadata = QAction("Keep Metadata on Save", self, checkable=True)
+        self.act_keep_metadata.setToolTip("Keep EXIF and the ICC colour profile when saving (orientation is reset)")
+        self.act_keep_metadata.setChecked(self.settings.value("save/keep_metadata", True, type=bool))
+        self.act_keep_metadata.toggled.connect(self._set_keep_metadata)
+
         self.act_stitch = QAction("Join Images...", self)
         self.act_stitch.setShortcut("Ctrl+J")
         self.act_stitch.triggered.connect(self.open_stitch_dialog)
@@ -498,6 +510,7 @@ class MainWindow(QMainWindow):
         file_menu.addAction(self.act_save)
         file_menu.addAction(self.act_save_as)
         file_menu.addAction(self.act_revert)
+        file_menu.addAction(self.act_keep_metadata)
         file_menu.addSeparator()
         file_menu.addAction(self.act_rename)
         file_menu.addAction(self.act_delete)
@@ -544,6 +557,7 @@ class MainWindow(QMainWindow):
 
         tools_menu = menubar.addMenu("&Tools")
         tools_menu.addAction(self.act_batch)
+        tools_menu.addAction(self.act_undo_batch)
         tools_menu.addAction(self.act_stitch)
         tools_menu.addAction(self.act_autostack)
 
@@ -674,6 +688,7 @@ class MainWindow(QMainWindow):
         self.is_video = False
         self.stack.setCurrentWidget(self.image_view)
         self.document = ImageDocument(path)
+        self.document.keep_metadata = self.act_keep_metadata.isChecked()
         self.adjustments_panel.set_values(brightness=0, contrast=0, saturation=0, red=0, green=0, blue=0)
         self._stop_gif_playback()
         if self.document.is_animated:
@@ -1106,7 +1121,39 @@ class MainWindow(QMainWindow):
         initial_paths = [e.path for e in self.navigator.entries] if self.navigator.entries else None
         dialog = BatchDialog(self, initial_paths=initial_paths)
         dialog.exec()
+        if dialog.last_run_changed_files:
+            # An empty value means the latest run has no journal on disk, so
+            # Undo Last Batch must not fall back to an older run.
+            path = dialog.last_journal_path
+            self.settings.setValue(LAST_BATCH_JOURNAL_KEY, str(path) if path and path.exists() else "")
         self._reload_after_external_change()
+
+    def undo_last_batch(self) -> None:
+        raw = self.settings.value(LAST_BATCH_JOURNAL_KEY, "", type=str)
+        journal = Path(raw) if raw else None
+        if journal is None or not journal.exists():
+            QMessageBox.information(self, "Undo Last Batch", "There is no batch run to undo.")
+            return
+        question = f"Revert the changes made by the last batch run?\n\nJournal: {journal}"
+        if QMessageBox.question(self, "Undo Last Batch", question) != QMessageBox.StandardButton.Yes:
+            return
+        try:
+            warnings = undo_journal(journal)
+        except (OSError, ValueError) as exc:
+            QMessageBox.critical(self, "Undo Last Batch", f"Could not read the undo journal:\n{exc}")
+            return
+        if not journal.exists():
+            self.settings.setValue(LAST_BATCH_JOURNAL_KEY, "")
+        if warnings:
+            QMessageBox.warning(self, "Undo Last Batch", "Undo finished with warnings:\n" + "\n".join(warnings))
+        else:
+            QMessageBox.information(self, "Undo Last Batch", "Batch changes reverted.")
+        self._reload_after_external_change()
+
+    def _set_keep_metadata(self, checked: bool) -> None:
+        self.settings.setValue("save/keep_metadata", checked)
+        if self.document is not None:
+            self.document.keep_metadata = checked
 
     def open_stitch_dialog(self) -> None:
         # Unlike Batch Rename & Edit (meant to run across a whole folder),

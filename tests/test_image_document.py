@@ -14,12 +14,21 @@ class ImageDocumentTests(unittest.TestCase):
         self.path = Path(self.tempdir.name) / "source.png"
         Image.new("RGB", (3, 2), (80, 40, 20)).save(self.path)
 
-    def test_load_initializes_clean_independent_base_image(self):
+    def test_load_initializes_clean_base_image(self):
         document = ImageDocument(str(self.path))
         self.assertEqual(document.size, (3, 2))
         self.assertFalse(document.dirty)
-        self.assertIsNot(document.original, document.base_image)
+        self.assertEqual(document.original.tobytes(), document.base_image.tobytes())
         self.assertEqual(document.adjustments, Adjustments())
+
+    def test_edits_never_mutate_the_original_image(self):
+        document = ImageDocument(str(self.path))
+        original_bytes = document.original.tobytes()
+        document.rotate90()
+        document.flip_horizontal()
+        document.set_adjustments(brightness=40)
+        document.commit_adjustments()
+        self.assertEqual(document.original.tobytes(), original_bytes)
 
     def test_preview_is_cached_until_adjustments_change(self):
         document = ImageDocument(str(self.path))

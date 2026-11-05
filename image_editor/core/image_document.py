@@ -17,7 +17,29 @@ from PIL import Image, ImageSequence
 from . import image_ops
 
 MAX_UNDO_DEPTH = 25
+# Upper bound on the pixel data kept for undo + redo combined. A 50 MP RGBA
+# photo is ~200 MB per step, so a count-only limit could reach several GB.
+# The newest undo step is always kept, even if it alone exceeds the budget.
+MAX_UNDO_BYTES = 512 * 1024 * 1024
 DEFAULT_FRAME_DURATION_MS = 100
+
+# Approximate bytes per pixel for the modes the editor can hold.
+_BYTES_PER_PIXEL = {
+    "1": 1, "L": 1, "P": 1,
+    "LA": 2, "PA": 2, "I;16": 2, "I;16L": 2, "I;16B": 2,
+    "RGB": 3, "YCbCr": 3, "LAB": 3, "HSV": 3,
+    "RGBA": 4, "RGBX": 4, "RGBa": 4, "CMYK": 4, "I": 4, "F": 4,
+}
+
+
+def _image_nbytes(image: Image.Image) -> int:
+    return image.width * image.height * _BYTES_PER_PIXEL.get(image.mode, 4)
+
+
+def _snapshot_nbytes(snapshot: Image.Image | list[Image.Image]) -> int:
+    if isinstance(snapshot, list):
+        return sum(_image_nbytes(frame) for frame in snapshot)
+    return _image_nbytes(snapshot)
 
 
 @dataclass(frozen=True)
@@ -39,6 +61,10 @@ class ImageDocument:
         self.original: Image.Image | None = None
         self.base_image: Image.Image | None = None
         self.adjustments = Adjustments()
+        # EXIF/ICC from the source file, and whether save() carries them over.
+        self.metadata = image_ops.ImageMetadata()
+        self.keep_metadata = True
+        self.undo_budget_bytes = MAX_UNDO_BYTES
 
         # Animated-GIF state. ``frames`` is None for an ordinary still image;
         # when set, it holds every frame (each the same size as base_image)
@@ -77,12 +103,14 @@ class ImageDocument:
             self._load_animated(raw, path)
             return
 
-        image = image_ops.load_with_orientation(path)
+        image, self.metadata = image_ops.load_oriented_with_metadata(path)
         if image.mode not in ("RGB", "RGBA"):
             image = image.convert("RGBA" if "transparency" in image.info or image.mode in ("P", "LA") else "RGB")
         self.path = str(path)
+        # Loaded images are never mutated in place (every edit builds a new
+        # image), so original and base_image can share one object.
         self.original = image
-        self.base_image = image.copy()
+        self.base_image = image
         self.frames = None
         self.original_frames = None
         self.frame_durations = []
@@ -108,14 +136,15 @@ class ImageDocument:
             disposals.append(getattr(frame, "disposal_method", 2))
 
         self.path = str(path)
+        self.metadata = image_ops.ImageMetadata()
         self.frames = frames
-        self.original_frames = [f.copy() for f in frames]
+        self.original_frames = list(frames)
         self.frame_durations = durations
         self.frame_disposal = disposals
         self.loop_count = raw.info.get("loop", 0)
         self.current_frame_index = 0
-        self.original = frames[0].copy()
-        self.base_image = frames[0].copy()
+        self.original = frames[0]
+        self.base_image = frames[0]
         self.adjustments = Adjustments()
         self._undo_stack.clear()
         self._redo_stack.clear()
@@ -183,6 +212,11 @@ class ImageDocument:
             save_kwargs["optimize"] = True
         elif ext == ".png":
             save_kwargs["optimize"] = True
+        save_kwargs.update(
+            image_ops.metadata_save_kwargs(
+                self.metadata if self.keep_metadata else None, ext, image.size
+            )
+        )
         image.save(target, **save_kwargs)
         self.path = target
         self.dirty = False
@@ -259,10 +293,13 @@ class ImageDocument:
         return True
 
     # -- geometric edits (each is its own undo step) -------------------------
+    # Snapshots hold references, not copies. This is safe because every edit
+    # assigns a freshly built image (or frame list) and never mutates the
+    # current one, so a stored snapshot cannot change underneath the history.
     def _snapshot(self) -> Image.Image | list[Image.Image]:
         if self.is_animated:
-            return [frame.copy() for frame in self.frames]
-        return self.base_image.copy()
+            return list(self.frames)
+        return self.base_image
 
     def _restore(self, snapshot: Image.Image | list[Image.Image]) -> None:
         if isinstance(snapshot, list):
@@ -272,12 +309,33 @@ class ImageDocument:
         else:
             self.base_image = snapshot
 
+    def _history_nbytes(self) -> int:
+        return sum(_snapshot_nbytes(s) for s in self._undo_stack) + sum(
+            _snapshot_nbytes(s) for s in self._redo_stack
+        )
+
+    def _enforce_history_budget(self) -> None:
+        """Drop the oldest history entries until count and byte limits hold.
+
+        Undo entries are evicted before redo entries, and the newest undo
+        entry is never evicted, so a single step of undo always remains.
+        """
+        for stack in (self._undo_stack, self._redo_stack):
+            while len(stack) > MAX_UNDO_DEPTH:
+                stack.pop(0)
+        while self._history_nbytes() > self.undo_budget_bytes:
+            if len(self._undo_stack) > 1:
+                self._undo_stack.pop(0)
+            elif len(self._redo_stack) > 1:
+                self._redo_stack.pop(0)
+            else:
+                break
+
     def _push_undo(self) -> None:
         assert self.base_image is not None
         self._undo_stack.append(self._snapshot())
-        if len(self._undo_stack) > MAX_UNDO_DEPTH:
-            self._undo_stack.pop(0)
         self._redo_stack.clear()
+        self._enforce_history_budget()
 
     def _apply_geometry(self, fn) -> None:
         if self.base_image is None:
@@ -327,6 +385,7 @@ class ImageDocument:
             return False
         self._redo_stack.append(self._snapshot())
         self._restore(self._undo_stack.pop())
+        self._enforce_history_budget()
         self.adjustments = Adjustments()
         self._invalidate_preview()
         self.dirty = True
@@ -338,6 +397,7 @@ class ImageDocument:
             return False
         self._undo_stack.append(self._snapshot())
         self._restore(self._redo_stack.pop())
+        self._enforce_history_budget()
         self.adjustments = Adjustments()
         self._invalidate_preview()
         self.dirty = True
@@ -349,11 +409,11 @@ class ImageDocument:
             return
         self._push_undo()
         if self.original_frames is not None:
-            self.frames = [frame.copy() for frame in self.original_frames]
+            self.frames = list(self.original_frames)
             self.current_frame_index = min(self.current_frame_index, len(self.frames) - 1)
             self.base_image = self.frames[self.current_frame_index]
         else:
-            self.base_image = self.original.copy()
+            self.base_image = self.original
         self.adjustments = Adjustments()
         self._invalidate_preview()
         self.dirty = True

@@ -18,10 +18,16 @@ A fast, IrfanView-style image and video viewer/editor built with PyQt6.
 - **Crop** — interactive crop rectangle with draggable handles.
 - **Adjustments** — live brightness, contrast, saturation and independent
   R/G/B channel sliders, with Apply/Reset/Cancel.
-- **Undo/redo** for every edit.
+- **Undo/redo** for every edit. History is capped by memory rather than
+  step count (about 512 MB of pixel data; the oldest steps are dropped first,
+  and the most recent one is always kept).
 - **File ops** — save, save as (format conversion via extension), revert to
   original, rename, delete (uses the system trash via `send2trash` when
   available, otherwise asks before permanently deleting).
+- **Metadata** — on save, EXIF (camera, date, GPS, ...) and the ICC colour
+  profile are kept for JPEG, PNG, WebP and TIFF. The orientation tag is reset
+  because pixels are already upright, and pixel-size tags are rewritten after
+  crop or resize. Turn this off with **File → Keep Metadata on Save**.
 - **Navigation** — next/previous within the folder, slideshow with a
   configurable interval.
 - Fullscreen mode, drag & drop to open a file or folder, EXIF orientation is
@@ -43,6 +49,15 @@ A fast, IrfanView-style image and video viewer/editor built with PyQt6.
   - **Output**: overwrite/rename in place, or write into a separate folder
     (non-destructive). Overwriting keeps `.bak` backups by default, so the
     whole run can be undone with one click (**Undo Last Run**).
+    Re-encoded files keep their EXIF and ICC profile unless you untick
+    *Keep EXIF metadata and ICC colour profile*; renamed or copied files are
+    never touched.
+  - Each run that changed files also writes a hidden
+    `.image-editor-batch-<timestamp>.json` **undo journal** next to its
+    outputs (the output folder, or the folder the sources share). **Tools →
+    Undo Last Batch** reverts the most recent run from that journal, even
+    after the dialog was closed or the app restarted. The journal is removed
+    once the undo completes without warnings.
   - Runs on a background thread with a progress bar and a per-file log, and
     can be cancelled mid-run.
 - **Join Images** (`Tools → Join Images...`, Ctrl+J) — combine several images
