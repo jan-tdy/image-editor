@@ -46,6 +46,44 @@ class ImageOpsTests(unittest.TestCase):
         self.assertEqual(cropped.size, (1, 1))
         self.assertEqual(cropped.getpixel((0, 0)), self.image.getpixel((2, 1)))
 
+    def test_perspective_crop_of_an_axis_aligned_quad_matches_plain_crop(self):
+        image = Image.new("RGB", (40, 30))
+        image.paste((255, 0, 0), (0, 0, 20, 15))
+        image.paste((0, 255, 0), (20, 0, 40, 15))
+        image.paste((0, 0, 255), (0, 15, 20, 30))
+        image.paste((255, 255, 0), (20, 15, 40, 30))
+
+        corners = ((5, 5), (35, 5), (35, 25), (5, 25))
+        result = image_ops.perspective_crop(image, corners)
+
+        self.assertEqual(result.size, (30, 20))
+        self.assertEqual(result.getpixel((0, 0)), (255, 0, 0))
+        self.assertEqual(result.getpixel((29, 0)), (0, 255, 0))
+        self.assertEqual(result.getpixel((0, 19)), (0, 0, 255))
+        self.assertEqual(result.getpixel((29, 19)), (255, 255, 0))
+
+    def test_perspective_crop_straightens_an_asymmetric_quad(self):
+        # A quad whose right edge is taller than its left edge, as if a
+        # rectangular document were photographed from the side - the
+        # output should still come out as a flat rectangle.
+        image = Image.new("RGB", (100, 100), (10, 10, 10))
+        corners = ((10, 20), (90, 0), (90, 100), (10, 80))
+
+        result = image_ops.perspective_crop(image, corners)
+
+        self.assertEqual(result.mode, image.mode)
+        # The output dimensions follow the quad's own (longer) edge
+        # lengths, which include the vertical offset between tl/tr - so
+        # they come out a little larger than the quad's horizontal span.
+        self.assertEqual(result.width, 82)
+        self.assertEqual(result.height, 100)
+
+    def test_perspective_crop_preserves_rgba_alpha(self):
+        image = Image.new("RGBA", (20, 20), (1, 2, 3, 4))
+        corners = ((2, 2), (18, 2), (18, 18), (2, 18))
+        result = image_ops.perspective_crop(image, corners)
+        self.assertEqual(result.mode, "RGBA")
+
     def test_resize_with_aspect_ratio_does_not_upscale(self):
         self.assertEqual(image_ops.resize(self.image, (30, 20), keep_aspect=True).size, (3, 2))
 

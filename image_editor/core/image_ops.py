@@ -9,6 +9,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
+import cv2
+import numpy as np
 from PIL import Image, ImageEnhance, ImageOps
 
 
@@ -45,6 +47,50 @@ def crop(image: Image.Image, box: tuple[int, int, int, int]) -> Image.Image:
     right = max(left + 1, min(right, image.width))
     bottom = max(top + 1, min(bottom, image.height))
     return image.crop((left, top, right, bottom))
+
+
+def perspective_crop(
+    image: Image.Image, corners: tuple[tuple[float, float], ...]
+) -> Image.Image:
+    """Crop an asymmetric quadrilateral and unwarp it into a rectangle.
+
+    ``corners`` are four (x, y) pixel coordinates in the order
+    top-left, top-right, bottom-right, bottom-left. Unlike a plain
+    rectangular crop, the four corners need not form a rectangle - this
+    is meant for straightening a document or sign photographed from an
+    angle, where each side of the subject has a different length and
+    skew in the source photo.
+
+    The output size is derived from the quad's own edge lengths (the
+    longer of each opposing pair), so the result keeps roughly the
+    subject's real proportions instead of being forced into the
+    original photo's aspect ratio.
+    """
+    tl, tr, br, bl = (np.array(pt, dtype=np.float32) for pt in corners)
+    width = max(np.linalg.norm(tr - tl), np.linalg.norm(br - bl))
+    height = max(np.linalg.norm(bl - tl), np.linalg.norm(br - tr))
+    width = max(1, round(width))
+    height = max(1, round(height))
+
+    src = np.array([tl, tr, br, bl], dtype=np.float32)
+    dst = np.array(
+        [[0, 0], [width - 1, 0], [width - 1, height - 1], [0, height - 1]],
+        dtype=np.float32,
+    )
+    matrix = cv2.getPerspectiveTransform(src, dst)
+
+    has_alpha = image.mode in ("RGBA", "LA")
+    source = np.array(image.convert("RGBA") if has_alpha else image.convert("RGB"))
+    warped = cv2.warpPerspective(
+        source,
+        matrix,
+        (width, height),
+        flags=cv2.INTER_LINEAR,
+        borderMode=cv2.BORDER_CONSTANT,
+        borderValue=(0, 0, 0, 0) if has_alpha else (0, 0, 0),
+    )
+    result = Image.fromarray(warped, "RGBA" if has_alpha else "RGB")
+    return result if result.mode == image.mode else result.convert(image.mode)
 
 
 def resize(image: Image.Image, size: tuple[int, int], keep_aspect: bool = True) -> Image.Image:

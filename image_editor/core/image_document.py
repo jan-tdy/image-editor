@@ -368,6 +368,9 @@ class ImageDocument:
     def crop(self, box: tuple[int, int, int, int]) -> None:
         self._apply_geometry(lambda img: image_ops.crop(img, box))
 
+    def perspective_crop(self, corners: tuple[tuple[float, float], ...]) -> None:
+        self._apply_geometry(lambda img: image_ops.perspective_crop(img, corners))
+
     def auto_adjust(self) -> None:
         """One-click auto contrast/levels, baked in as its own undo step."""
         self._apply_geometry(image_ops.autocontrast)
