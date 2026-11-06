@@ -410,7 +410,13 @@ class ImageView(QGraphicsView):
 
     def mouseDoubleClickEvent(self, event):
         if self.quad_crop_mode:
-            self.commit_quad_crop()
+            # Unlike the single rectangle, this tool has 4 independent
+            # corners adjusted one at a time - two quick, unrelated
+            # corner drags can land close enough in time and position for
+            # Qt to read them as a double click, which would commit
+            # whatever shape existed between them rather than the one the
+            # user actually finished dragging. Require the explicit Apply
+            # action (toolbar/Shift+Enter) instead.
             event.accept()
             return
         if self.crop_mode:
