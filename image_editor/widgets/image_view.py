@@ -1,11 +1,12 @@
-"""Zoom/pan image viewer with an interactive crop-rectangle tool."""
+"""Zoom/pan image viewer with interactive rectangle and perspective crop tools."""
 from __future__ import annotations
 
 from PyQt6.QtCore import QPoint, QPointF, QRectF, Qt, pyqtSignal
-from PyQt6.QtGui import QBrush, QColor, QPainter, QPen, QPixmap
+from PyQt6.QtGui import QBrush, QColor, QPainter, QPen, QPixmap, QPolygonF
 from PyQt6.QtWidgets import (
     QGraphicsItem,
     QGraphicsPixmapItem,
+    QGraphicsPolygonItem,
     QGraphicsRectItem,
     QGraphicsScene,
     QGraphicsView,
@@ -16,12 +17,14 @@ from ..constants import ZOOM_MAX, ZOOM_MIN, ZOOM_STEP
 HANDLE_SIZE = 10
 HANDLE_HIT_MARGIN = 6  # extra on-screen pixels of grab tolerance around each handle
 HANDLES = ("tl", "t", "tr", "l", "r", "bl", "b", "br")
+QUAD_CORNERS = ("tl", "tr", "br", "bl")
 
 
 class ImageView(QGraphicsView):
     zoomChanged = pyqtSignal(float)
     cropRectChanged = pyqtSignal(object)  # QRectF or None
     cropCommitted = pyqtSignal(tuple)  # (left, top, right, bottom) ints
+    quadCropCommitted = pyqtSignal(tuple)  # ((x, y) * 4) floats, tl/tr/br/bl order
     panRequested = pyqtSignal()
 
     def __init__(self, parent=None):
@@ -49,11 +52,20 @@ class ImageView(QGraphicsView):
         self._drag_origin = QPointF()
         self._rect_at_drag_start = QRectF()
 
+        self.quad_crop_mode = False
+        self._quad_poly_item: QGraphicsPolygonItem | None = None
+        self._quad_handles: dict[str, QGraphicsRectItem] = {}
+        self._quad_points: dict[str, QPointF] = {}
+        self._quad_drag_corner: str | None = None
+
     # -- image loading --------------------------------------------------
     def set_pixmap(self, pixmap: QPixmap, recenter: bool = True) -> None:
         self._scene.clear()
         self._crop_rect_item = None
         self._crop_handles.clear()
+        self._quad_poly_item = None
+        self._quad_handles.clear()
+        self._quad_points.clear()
         self._pixmap_item = self._scene.addPixmap(pixmap)
         self._scene.setSceneRect(QRectF(pixmap.rect()))
         if self._fit_mode:
@@ -76,6 +88,9 @@ class ImageView(QGraphicsView):
         self._pixmap_item = None
         self._crop_rect_item = None
         self._crop_handles.clear()
+        self._quad_poly_item = None
+        self._quad_handles.clear()
+        self._quad_points.clear()
 
     def image_rect(self) -> QRectF:
         if self._pixmap_item is None:
@@ -228,8 +243,103 @@ class ImageView(QGraphicsView):
                 return name
         return None
 
+    # -- perspective (quad) crop tool ----------------------------------------
+    def enter_quad_crop_mode(self) -> None:
+        """Start the 4-corner crop tool, for straightening a document or
+        sign that was photographed at an angle. Unlike the rectangular
+        crop, each corner moves independently so the quad need not stay
+        a rectangle."""
+        if self._pixmap_item is None:
+            return
+        self.quad_crop_mode = True
+        self.setDragMode(QGraphicsView.DragMode.NoDrag)
+        self.setCursor(Qt.CursorShape.CrossCursor)
+        if self._quad_poly_item is None:
+            rect = self.image_rect()
+            margin_x, margin_y = rect.width() * 0.1, rect.height() * 0.1
+            inset = rect.adjusted(margin_x, margin_y, -margin_x, -margin_y)
+            points = {
+                "tl": inset.topLeft(), "tr": inset.topRight(),
+                "br": inset.bottomRight(), "bl": inset.bottomLeft(),
+            }
+            self._set_quad_points(points)
+
+    def exit_quad_crop_mode(self, keep_points: bool = False) -> None:
+        self.quad_crop_mode = False
+        self.setDragMode(QGraphicsView.DragMode.ScrollHandDrag)
+        self.unsetCursor()
+        if not keep_points:
+            self._remove_quad_items()
+
+    def _remove_quad_items(self) -> None:
+        if self._quad_poly_item is not None:
+            self._scene.removeItem(self._quad_poly_item)
+            self._quad_poly_item = None
+        for handle in self._quad_handles.values():
+            self._scene.removeItem(handle)
+        self._quad_handles.clear()
+        self._quad_points.clear()
+
+    def current_quad_points(self) -> tuple[QPointF, QPointF, QPointF, QPointF] | None:
+        if self._quad_poly_item is None:
+            return None
+        return tuple(self._quad_points[name] for name in QUAD_CORNERS)
+
+    def commit_quad_crop(self) -> None:
+        points = self.current_quad_points()
+        if points is None:
+            return
+        corners = tuple((p.x(), p.y()) for p in points)
+        self.quadCropCommitted.emit(corners)
+        self.exit_quad_crop_mode(keep_points=False)
+
+    def _set_quad_points(self, points: dict[str, QPointF]) -> None:
+        bounds = self.image_rect()
+        clamped = {
+            name: QPointF(
+                min(max(p.x(), bounds.left()), bounds.right()),
+                min(max(p.y(), bounds.top()), bounds.bottom()),
+            )
+            for name, p in points.items()
+        }
+        self._quad_points = clamped
+        polygon = QPolygonF([clamped[name] for name in QUAD_CORNERS])
+        if self._quad_poly_item is None:
+            pen = QPen(QColor(255, 255, 255), 1.5, Qt.PenStyle.DashLine)
+            self._quad_poly_item = self._scene.addPolygon(polygon, pen, QBrush(QColor(0, 0, 0, 0)))
+            self._quad_poly_item.setZValue(10)
+            half = HANDLE_SIZE / 2
+            for name in QUAD_CORNERS:
+                handle = self._scene.addRect(
+                    -half, -half, HANDLE_SIZE, HANDLE_SIZE,
+                    QPen(QColor(30, 30, 30)), QBrush(QColor(255, 255, 255)),
+                )
+                handle.setZValue(11)
+                handle.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIgnoresTransformations, True)
+                self._quad_handles[name] = handle
+        else:
+            self._quad_poly_item.setPolygon(polygon)
+        for name in QUAD_CORNERS:
+            self._quad_handles[name].setPos(clamped[name])
+
+    def _quad_handle_at(self, view_pos: QPoint) -> str | None:
+        tolerance = HANDLE_SIZE / 2 + HANDLE_HIT_MARGIN
+        for name, handle in self._quad_handles.items():
+            anchor = self.mapFromScene(handle.pos())
+            if (
+                abs(anchor.x() - view_pos.x()) <= tolerance
+                and abs(anchor.y() - view_pos.y()) <= tolerance
+            ):
+                return name
+        return None
+
     # -- mouse handling -------------------------------------------------------
     def mousePressEvent(self, event):
+        if self.quad_crop_mode and self._pixmap_item is not None:
+            handle = self._quad_handle_at(event.pos())
+            self._quad_drag_corner = handle
+            event.accept()
+            return
         if not self.crop_mode or self._pixmap_item is None:
             return super().mousePressEvent(event)
         pos = self.mapToScene(event.pos())
@@ -247,6 +357,15 @@ class ImageView(QGraphicsView):
         event.accept()
 
     def mouseMoveEvent(self, event):
+        if self.quad_crop_mode:
+            if self._quad_drag_corner is None:
+                return super().mouseMoveEvent(event)
+            pos = self.mapToScene(event.pos())
+            points = dict(self._quad_points)
+            points[self._quad_drag_corner] = pos
+            self._set_quad_points(points)
+            event.accept()
+            return
         if not self.crop_mode or self._drag_mode is None:
             return super().mouseMoveEvent(event)
         pos = self.mapToScene(event.pos())
@@ -280,12 +399,20 @@ class ImageView(QGraphicsView):
         event.accept()
 
     def mouseReleaseEvent(self, event):
+        if self.quad_crop_mode:
+            self._quad_drag_corner = None
+            event.accept()
+            return
         if not self.crop_mode:
             return super().mouseReleaseEvent(event)
         self._drag_mode = None
         event.accept()
 
     def mouseDoubleClickEvent(self, event):
+        if self.quad_crop_mode:
+            self.commit_quad_crop()
+            event.accept()
+            return
         if self.crop_mode:
             self.commit_crop()
             event.accept()

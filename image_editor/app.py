@@ -184,6 +184,7 @@ class MainWindow(QMainWindow):
         self.image_view.zoomChanged.connect(self._on_zoom_changed)
         self.image_view.cropCommitted.connect(self._on_crop_committed)
         self.image_view.cropRectChanged.connect(self._on_crop_rect_changed)
+        self.image_view.quadCropCommitted.connect(self._on_quad_crop_committed)
 
         self.video_view = VideoView()
         if MULTIMEDIA_AVAILABLE:
@@ -428,6 +429,21 @@ class MainWindow(QMainWindow):
         self.act_crop_cancel.triggered.connect(self.cancel_crop)
         self.act_crop_cancel.setEnabled(False)
 
+        self.act_quad_crop = QAction("Perspective Crop (Document)", self)
+        self.act_quad_crop.setShortcut("Shift+C")
+        self.act_quad_crop.setCheckable(True)
+        self.act_quad_crop.triggered.connect(self.toggle_quad_crop)
+
+        self.act_quad_crop_apply = QAction("Apply Perspective Crop", self)
+        self.act_quad_crop_apply.setShortcut("Shift+Return")
+        self.act_quad_crop_apply.triggered.connect(self.image_view.commit_quad_crop)
+        self.act_quad_crop_apply.setEnabled(False)
+
+        self.act_quad_crop_cancel = QAction("Cancel Perspective Crop", self)
+        self.act_quad_crop_cancel.setShortcut("Escape")
+        self.act_quad_crop_cancel.triggered.connect(self.cancel_quad_crop)
+        self.act_quad_crop_cancel.setEnabled(False)
+
         self.act_adjustments = QAction("Adjustments...", self)
         self.act_adjustments.setShortcut("Ctrl+U")
         self.act_adjustments.setCheckable(True)
@@ -530,6 +546,10 @@ class MainWindow(QMainWindow):
         edit_menu.addAction(self.act_crop_apply)
         edit_menu.addAction(self.act_crop_cancel)
         edit_menu.addSeparator()
+        edit_menu.addAction(self.act_quad_crop)
+        edit_menu.addAction(self.act_quad_crop_apply)
+        edit_menu.addAction(self.act_quad_crop_cancel)
+        edit_menu.addSeparator()
         edit_menu.addAction(self.act_adjustments)
         edit_menu.addAction(self.act_auto_adjust)
 
@@ -584,7 +604,7 @@ class MainWindow(QMainWindow):
         for action in (self.act_undo, self.act_redo):
             toolbar.addAction(action)
         toolbar.addSeparator()
-        for action in (self.act_rotate_left, self.act_rotate_right, self.act_flip_h, self.act_flip_v, self.act_crop):
+        for action in (self.act_rotate_left, self.act_rotate_right, self.act_flip_h, self.act_flip_v, self.act_crop, self.act_quad_crop):
             toolbar.addAction(action)
         toolbar.addSeparator()
         for action in (self.act_zoom_out, self.act_zoom_fit, self.act_zoom_in):
@@ -868,6 +888,7 @@ class MainWindow(QMainWindow):
             self.act_crop.setChecked(False)
             return
         if checked:
+            self.cancel_quad_crop()
             self._stop_gif_playback()
             self.image_view.enter_crop_mode()
         else:
@@ -892,6 +913,34 @@ class MainWindow(QMainWindow):
         self.act_crop.setChecked(False)
         self.act_crop_apply.setEnabled(False)
         self.act_crop_cancel.setEnabled(False)
+
+    def toggle_quad_crop(self, checked: bool) -> None:
+        if not self._guard_image():
+            self.act_quad_crop.setChecked(False)
+            return
+        if checked:
+            self.cancel_crop()
+            self._stop_gif_playback()
+            self.image_view.enter_quad_crop_mode()
+        else:
+            self.image_view.exit_quad_crop_mode()
+        self.act_quad_crop_apply.setEnabled(checked)
+        self.act_quad_crop_cancel.setEnabled(checked)
+
+    def cancel_quad_crop(self) -> None:
+        self.act_quad_crop.setChecked(False)
+        self.image_view.exit_quad_crop_mode()
+        self.act_quad_crop_apply.setEnabled(False)
+        self.act_quad_crop_cancel.setEnabled(False)
+
+    def _on_quad_crop_committed(self, corners: tuple[tuple[float, float], ...]) -> None:
+        if not self._guard_image():
+            return
+        self.document.perspective_crop(corners)
+        self.refresh_view()
+        self.act_quad_crop.setChecked(False)
+        self.act_quad_crop_apply.setEnabled(False)
+        self.act_quad_crop_cancel.setEnabled(False)
 
     def toggle_adjustments(self, checked: bool) -> None:
         self.adjust_dock.setVisible(checked)
@@ -1103,8 +1152,8 @@ class MainWindow(QMainWindow):
         for action in (
             self.act_save, self.act_save_as, self.act_revert,
             self.act_rotate_left, self.act_rotate_right,
-            self.act_flip_h, self.act_flip_v, self.act_crop, self.act_adjustments,
-            self.act_auto_adjust,
+            self.act_flip_h, self.act_flip_v, self.act_crop, self.act_quad_crop,
+            self.act_adjustments, self.act_auto_adjust,
         ):
             action.setEnabled(has_image)
         self.act_undo.setEnabled(has_image and self.document.can_undo())
@@ -1198,8 +1247,10 @@ class MainWindow(QMainWindow):
             f"About {APP_NAME}",
             f"<h3>{APP_NAME}</h3>"
             "<p>A fast PyQt6 image &amp; video viewer/editor.</p>"
-            "<p>Browse folders, view images and videos, rotate/flip/crop, "
-            "and adjust brightness, contrast, saturation and RGB channels. "
+            "<p>Browse folders, view images and videos, rotate/flip/crop "
+            "(including a 4-corner perspective crop for straightening "
+            "photographed documents), and adjust brightness, contrast, "
+            "saturation and RGB channels. "
             "Batch rename/convert/resize/adjust and an image-joining tool "
             "are available under Tools.</p>",
         )
