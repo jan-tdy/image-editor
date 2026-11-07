@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PyView Editor — docs</title>
+<meta name="description" content="PyView Editor by JapySoft: a fast image viewer/editor with batch tools and Photo Triage.">
+<style>
+:root{--bg:#fbfaf7;--fg:#1d1d1f;--mut:#62666d;--card:#fff;--line:#e4e1d9;--acc:#2f6f4e;--fav:#c28a00;--bad:#b3392f}
+@media (prefers-color-scheme:dark){:root{--bg:#161715;--fg:#ececea;--mut:#a3a69f;--card:#1f211e;--line:#33362f;--acc:#6bc08f}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.65 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+header{padding:56px 16px 32px;text-align:center}
+h1{font-size:2.4rem;margin:0 0 8px}
+header p{color:var(--mut);max-width:620px;margin:0 auto}
+nav{display:flex;flex-wrap:wrap;gap:8px 18px;justify-content:center;padding:0 16px 24px}
+nav a{color:var(--acc);text-decoration:none;font-weight:600}
+main{max-width:900px;margin:0 auto;padding:0 16px 64px}
+section{margin-top:40px}
+h2{font-size:1.5rem;border-bottom:1px solid var(--line);padding-bottom:6px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:16px 20px;margin:14px 0}
+img{max-width:100%;border:1px solid var(--line);border-radius:8px}
+code,kbd{font:0.9em ui-monospace,Menlo,Consolas,monospace;background:var(--card);border:1px solid var(--line);border-radius:4px;padding:1px 6px}
+pre{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:12px;overflow-x:auto}
+pre code{border:0;padding:0}
+table{border-collapse:collapse;width:100%}
+th,td{text-align:left;border-bottom:1px solid var(--line);padding:6px 8px;vertical-align:top}
+.keep{color:var(--acc)}.fav{color:var(--fav)}.trash{color:var(--bad)}
+footer{text-align:center;color:var(--mut);padding:24px 16px;border-top:1px solid var(--line)}
+a{color:var(--acc)}
+</style>
+</head>
+<body>
+<header>
+  <h1>PyView Editor</h1>
+  <p>A fast, IrfanView-style image and video viewer/editor built with PyQt6 — with batch tools, image joining, smart stitching and <b>Photo Triage</b>.</p>
+</header>
+<nav>
+  <a href="#install">Install</a><a href="#triage">Photo Triage</a><a href="#shortcuts">Shortcuts</a>
+  <a href="#tools">Other tools</a><a href="https://github.com/jan-tdy/image-editor">GitHub</a>
+</nav>
+<main>
+<section id="install">
+  <h2>Install &amp; run</h2>
+  <pre><code>pip install -r requirements.txt
+python3 main.py</code></pre>
+  <p>Requires Python 3.10+. Video playback needs the usual system codecs (ffmpeg/gstreamer); the app works without them.</p>
+</section>
+
+<section id="triage">
+  <h2>Photo Triage</h2>
+  <p>Sort a whole folder of photos quickly: look at each one, decide, and apply everything as one reviewed batch.
+     Open it from <b>Tools → Photo Triage…</b> (<kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>K</kbd>).</p>
+
+  <h3>1. Setup</h3>
+  <ul>
+    <li><b>Photos folder</b> — where the pictures are.</li>
+    <li><b>Favourites folder</b> — where favourited photos are moved.</li>
+    <li><b>Order</b> — name (natural: <code>img2</code> before <code>img10</code>), date taken (EXIF, falling back to file modified time) or random; ascending or descending.</li>
+  </ul>
+
+  <h3>2. Review window</h3>
+  <p><img src="assets/triage-review.png" alt="Photo Triage review window"></p>
+  <ul>
+    <li><b>Top</b> — the file name; edit it and press <i>Rename</i> (or Enter). The rename is applied with whatever action you choose, including <span class="keep">Keep</span>.</li>
+    <li><b>Centre</b> — the photo; <b>side</b> — info (dimensions, size, date, camera, decision, progress).</li>
+    <li><b>Bottom left / right</b> — <b>Back</b> returns to the previously shown photo (you can change its decision); <b>Next</b> postpones this photo: it goes to the <i>end of the queue</i> and will come back later.</li>
+    <li><b>Bottom centre</b> — <span class="keep">Keep</span> (leave where it is), <span class="fav">★ Favourite</span> (move to the favourites folder), <span class="trash">Trash</span> (send to the system trash).</li>
+  </ul>
+
+  <h3>3. Summary &amp; apply</h3>
+  <p>When the queue is empty — or when you click <i>Finish…</i> — a summary lists every change. Nothing has touched the disk until you click <b>Apply all</b>.
+     <i>Back to review</i> lets you keep going. Undecided photos are left untouched.</p>
+  <p><img src="assets/triage-summary.png" alt="Photo Triage summary"></p>
+
+  <div class="card">
+    <b>Safety:</b> trash uses the system trash (recoverable) via <code>send2trash</code>; if it is not installed nothing is deleted and an error is reported.
+    Name clashes in the favourites folder or on rename get a <code>(1)</code> suffix instead of overwriting.
+  </div>
+</section>
+
+<section id="shortcuts">
+  <h2>Photo Triage shortcuts</h2>
+  <table>
+    <tr><th>Key</th><th>Action</th></tr>
+    <tr><td><kbd>K</kbd></td><td>Keep</td></tr>
+    <tr><td><kbd>F</kbd></td><td>Favourite</td></tr>
+    <tr><td><kbd>T</kbd> / <kbd>Del</kbd></td><td>Trash</td></tr>
+    <tr><td><kbd>→</kbd></td><td>Next (decide later)</td></tr>
+    <tr><td><kbd>←</kbd> / <kbd>Backspace</kbd></td><td>Back</td></tr>
+  </table>
+  <p>Letter shortcuts are disabled while the name field has focus, so typing a new name is safe.</p>
+</section>
+
+<section id="tools">
+  <h2>Other tools</h2>
+  <ul>
+    <li><b>Batch Rename &amp; Edit</b> (<kbd>Ctrl</kbd>+<kbd>B</kbd>) — rename, convert, resize, adjust many files with undo journal.</li>
+    <li><b>Join Images</b> (<kbd>Ctrl</kbd>+<kbd>J</kbd>) — horizontal / vertical / grid composites.</li>
+    <li><b>Auto-Stack</b> (<kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>J</kbd>) — stitch overlapping photos into one large image.</li>
+    <li>Viewer: zoom/pan, rotate/flip, crop (incl. perspective), adjustments, undo/redo, slideshow. See the <a href="https://github.com/jan-tdy/image-editor#readme">README</a> for the full list.</li>
+  </ul>
+</section>
+</main>
+<footer>© JapySoft · <a href="https://github.com/jan-tdy/image-editor">jan-tdy/image-editor</a> · MIT licence</footer>
+</body>
+</html>

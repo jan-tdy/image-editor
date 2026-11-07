@@ -40,6 +40,7 @@ from .dialogs.autostack_dialog import AutoStackDialog
 from .dialogs.batch_dialog import BatchDialog
 from .workers.batch_journal import undo_journal
 from .dialogs.stitch_dialog import StitchDialog
+from .dialogs.triage_dialog import run_photo_triage
 from .models.file_model import FolderNavigator
 from .widgets.adjustments_panel import AdjustmentsPanel
 from .widgets.gif_transport import GifTransportBar
@@ -506,6 +507,10 @@ class MainWindow(QMainWindow):
         self.act_stitch.setShortcut("Ctrl+J")
         self.act_stitch.triggered.connect(self.open_stitch_dialog)
 
+        self.act_triage = QAction("Photo Triage (Keep / Favourite / Trash)...", self)
+        self.act_triage.setShortcut("Ctrl+Shift+K")
+        self.act_triage.triggered.connect(self.open_triage_dialog)
+
         self.act_autostack = QAction("Auto-Stack (Smart Stitch)...", self)
         self.act_autostack.setShortcut("Ctrl+Shift+J")
         self.act_autostack.triggered.connect(self.open_autostack_dialog)
@@ -580,6 +585,7 @@ class MainWindow(QMainWindow):
         tools_menu.addAction(self.act_undo_batch)
         tools_menu.addAction(self.act_stitch)
         tools_menu.addAction(self.act_autostack)
+        tools_menu.addAction(self.act_triage)
 
         help_menu = menubar.addMenu("&Help")
         help_menu.addAction(self.act_about)
@@ -1213,6 +1219,10 @@ class MainWindow(QMainWindow):
         # empty; the user adds exactly the images they want via "Add Images...".
         dialog = StitchDialog(self)
         dialog.exec()
+        self._reload_after_external_change()
+
+    def open_triage_dialog(self) -> None:
+        run_photo_triage(self, self.settings)
         self._reload_after_external_change()
 
     def open_autostack_dialog(self) -> None:
