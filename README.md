@@ -104,7 +104,7 @@ A fast, IrfanView-style image and video viewer/editor built with PyQt6.
     A rename is applied together with any action, including Keep.
   - A summary of all changes is shown first; nothing touches the disk until
     you click *Apply all*. Favourite moves the file, Trash uses the system
-    trash (`send2trash`). Docs: `docs/index.html` (GitHub Pages).
+    trash (`send2trash`). Full documentation: <https://jan-tdy.github.io/image-editor/> (MkDocs, source in `docs/`).
 
 ## Requirements
 
