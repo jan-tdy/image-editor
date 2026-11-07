@@ -1,6 +1,6 @@
 # PyView Editor
 
-A fast, IrfanView-style image and video viewer/editor built with **PyQt6** — by [JapySoft](https://github.com/jan-tdy).
+A fast, IrfanView-style image and video viewer/editor built with **PyQt6** — by [jan-tdy](https://github.com/jan-tdy).
 
 ![PyView Editor main window](assets/viewer.webp)
 
