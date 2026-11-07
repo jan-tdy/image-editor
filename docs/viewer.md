@@ -1,5 +1,7 @@
 # Viewer & editor
 
+![Main window with the thumbnail browser](assets/viewer.webp)
+
 The main window has a **Browser** panel (thumbnails of the current folder, loaded asynchronously, naturally sorted) and the viewer. Open a file or folder with ++ctrl+o++ / ++ctrl+shift+o++, or drop it onto the window.
 
 ## Viewing

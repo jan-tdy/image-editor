@@ -1,5 +1,7 @@
 # Batch Rename & Edit
 
+![Batch Rename & Edit dialog](assets/batch.png)
+
 `Tools → Batch Rename & Edit...` (++ctrl+b++) — pick files (or start from the open folder), then combine any of the following.
 
 ## Rename

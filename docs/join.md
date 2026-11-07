@@ -1,5 +1,7 @@
 # Join Images
 
+![Join Images dialog](assets/join.png)
+
 `Tools → Join Images...` (++ctrl+j++) combines several images side by side.
 
 - **Layout:** horizontal, vertical or grid, with a reorderable (drag & drop) image list.

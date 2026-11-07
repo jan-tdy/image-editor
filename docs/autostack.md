@@ -1,5 +1,7 @@
 # Auto-Stack (Smart Stitch)
 
+![Auto-Stack dialog](assets/autostack.png)
+
 `Tools → Auto-Stack (Smart Stitch)...` (++ctrl+shift+j++) combines many overlapping photos of the same scene (e.g. dozens of garden shots taken from different spots) into one large image by matching visual features between photos, using OpenCV's `Stitcher`.
 
 - Add individual files or a whole folder; loading, alignment and blending run in the background with progress.

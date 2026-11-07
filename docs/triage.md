@@ -9,6 +9,8 @@ Open it from **Tools → Photo Triage…** (++ctrl+shift+k++).
 
 ## 1. Setup
 
+![Photo Triage setup](assets/triage-setup.png)
+
 | Field | Meaning |
 |---|---|
 | Photos folder | Folder with the pictures to review (images directly inside it). |
