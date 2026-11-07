@@ -93,6 +93,19 @@ A fast, IrfanView-style image and video viewer/editor built with PyQt6.
     instead of crashing — try the other scene type or add more overlap
     between shots.
 
+- **Photo Triage** (`Tools → Photo Triage...`, Ctrl+Shift+K) — sort a folder
+  of photos into **Keep / Favourite / Trash** one by one, then apply everything
+  as a single reviewed batch:
+  - Setup: photos folder, favourites folder, order (name / date taken /
+    random, ascending or descending).
+  - Review window: photo in the centre, info at the side, rename field on
+    top, **Back** / **Next** at the bottom corners (Next postpones the photo
+    to the end of the queue), and Keep (K) / Favourite (F) / Trash (T) buttons.
+    A rename is applied together with any action, including Keep.
+  - A summary of all changes is shown first; nothing touches the disk until
+    you click *Apply all*. Favourite moves the file, Trash uses the system
+    trash (`send2trash`). Docs: `docs/index.html` (GitHub Pages).
+
 ## Requirements
 
 - Python 3.10+
