@@ -99,7 +99,13 @@ class ImageDocument:
     def load(self, path: str) -> None:
         """Load an image with EXIF orientation applied and reset all edit state."""
         raw = Image.open(path)
-        if getattr(raw, "is_animated", False) and getattr(raw, "n_frames", 1) > 1:
+        # Only real animation formats: camera JPEGs are MPO files whose extra
+        # "frames" are previews/stereo pairs, not an animation.
+        if (
+            raw.format in ("GIF", "WEBP", "PNG")
+            and getattr(raw, "is_animated", False)
+            and getattr(raw, "n_frames", 1) > 1
+        ):
             self._load_animated(raw, path)
             return
 

@@ -67,6 +67,9 @@ class ImageView(QGraphicsView):
         self._quad_handles.clear()
         self._quad_points.clear()
         self._pixmap_item = self._scene.addPixmap(pixmap)
+        # Default is FastTransformation (nearest-neighbour), which ignores the
+        # view's SmoothPixmapTransform hint and looks blocky when zoomed.
+        self._pixmap_item.setTransformationMode(Qt.TransformationMode.SmoothTransformation)
         self._scene.setSceneRect(QRectF(pixmap.rect()))
         if self._fit_mode:
             self.fit_to_window()
