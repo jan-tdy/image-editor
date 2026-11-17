@@ -52,6 +52,26 @@ class TriageReviewDialogTests(unittest.TestCase):
         d.keyPressEvent(QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_F, Qt.KeyboardModifier.NoModifier))
         self.assertEqual(d.session.decisions[self.paths[0]], ops.FAVOURITE)
 
+    def test_next_on_decided_photo_keeps_decision_in_place(self):
+        d = self.dlg
+        d.trash_button.click()  # a -> trash, current b
+        d.back_button.click()   # back to a, decision kept
+        self.assertEqual(d.session.decisions[self.paths[0]], ops.TRASH)
+        d.next_button.click()   # "Next" on an already-decided photo
+        self.assertEqual(os.path.basename(d.session.current), "b.png")
+        self.assertEqual(d.session.decisions.get(self.paths[0]), ops.TRASH)
+        self.assertEqual([os.path.basename(p) for p in d.session.queue], ["c.png"])
+
+    def test_clear_button_undecides_current_photo(self):
+        d = self.dlg
+        d.trash_button.click()  # a -> trash, current b
+        d.back_button.click()   # back to a
+        self.assertTrue(d.clear_button.isEnabled())
+        d.clear_button.click()
+        self.assertNotIn(self.paths[0], d.session.decisions)
+        self.assertEqual(os.path.basename(d.session.current), "a.png")
+        self.assertFalse(d.clear_button.isEnabled())
+
     def test_summary_lists_changes(self):
         s = self.dlg.session
         s.decide(ops.FAVOURITE)

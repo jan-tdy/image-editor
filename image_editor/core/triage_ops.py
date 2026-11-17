@@ -126,15 +126,25 @@ class TriageSession:
         self._advance()
 
     def defer(self) -> None:
-        """Next: leave undecided and send to the end of the queue."""
+        """Next: step forward. An already-decided photo just moves on, keeping
+        its decision and its place in the queue; only an undecided photo is
+        rotated to the end."""
         if self.current is None:
             return
-        self.decisions.pop(self.current, None)
+        if self.current in self.decisions:
+            self.history.append(self.current)
+            self._advance()
+            return
         if not self.queue:
             return  # the only photo left - nothing to rotate to
         self.history.append(self.current)
         self.queue.append(self.current)
         self._advance()
+
+    def clear_decision(self) -> None:
+        """Explicitly un-decide the current photo (does not move it)."""
+        if self.current is not None:
+            self.decisions.pop(self.current, None)
 
     def back(self) -> None:
         if not self.history:
