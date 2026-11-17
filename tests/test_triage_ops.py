@@ -53,6 +53,27 @@ class TriageSessionTests(unittest.TestCase):
         self.assertEqual(s.current, "a")
         self.assertEqual(s.remaining(), 1)
 
+    def test_defer_after_back_keeps_decision_and_position(self):
+        s = ops.TriageSession(["a", "b", "c"])
+        s.decide(ops.TRASH)  # a -> trash, current b
+        s.back()              # current a, decision kept
+        self.assertEqual(s.decisions["a"], ops.TRASH)
+        s.defer()              # "Next" on an already-decided photo
+        self.assertEqual(s.current, "b")
+        self.assertEqual(s.decisions.get("a"), ops.TRASH)
+        self.assertEqual(list(s.queue), ["c"])
+
+    def test_clear_decision_undecides_without_moving(self):
+        s = ops.TriageSession(["a", "b"])
+        s.decide(ops.TRASH)  # a -> trash, current b
+        s.back()              # current a
+        s.clear_decision()
+        self.assertEqual(s.current, "a")
+        self.assertNotIn("a", s.decisions)
+        s.defer()              # now undecided, so it rotates to the end
+        self.assertEqual(s.current, "b")
+        self.assertEqual(list(s.queue), ["a"])
+
     def test_normalize_name(self):
         self.assertEqual(ops.normalize_new_name("/x/a.jpg", "b"), "b.jpg")
         self.assertEqual(ops.normalize_new_name("/x/a.jpg", "b.png"), "b.png")

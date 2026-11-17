@@ -265,10 +265,15 @@ class TriageReviewDialog(QDialog):
         # bottom: back | keep favourite trash | next
         self.back_button = QPushButton("◀  Back")
         self.next_button = QPushButton("Next  ▶")
-        self.next_button.setToolTip("Decide later - moves this photo to the end of the queue")
+        self.next_button.setToolTip(
+            "Move on. An undecided photo goes to the end of the queue; "
+            "a decided photo just moves on, decision kept."
+        )
         self.keep_button = self._action_button(ops.KEEP, "Keep  (K)")
         self.fav_button = self._action_button(ops.FAVOURITE, "★ Favourite  (F)")
         self.trash_button = self._action_button(ops.TRASH, "Trash  (T)")
+        self.clear_button = QPushButton("Clear decision  (U)")
+        self.clear_button.setToolTip("Un-decide this photo (stays in place)")
         self.finish_button = QPushButton("Finish...")
         self.finish_button.setToolTip("Review the summary and apply everything")
         self.back_button.clicked.connect(self.go_back)
@@ -276,6 +281,7 @@ class TriageReviewDialog(QDialog):
         self.keep_button.clicked.connect(lambda: self.decide(ops.KEEP))
         self.fav_button.clicked.connect(lambda: self.decide(ops.FAVOURITE))
         self.trash_button.clicked.connect(lambda: self.decide(ops.TRASH))
+        self.clear_button.clicked.connect(self.clear_decision)
         self.finish_button.clicked.connect(self.finish)
         for b in (self.back_button, self.next_button):
             b.setMinimumHeight(48)
@@ -285,6 +291,7 @@ class TriageReviewDialog(QDialog):
         bottom.addWidget(self.keep_button)
         bottom.addWidget(self.fav_button)
         bottom.addWidget(self.trash_button)
+        bottom.addWidget(self.clear_button)
         bottom.addStretch(1)
         bottom.addWidget(self.next_button)
         extra = QHBoxLayout()
@@ -333,6 +340,10 @@ class TriageReviewDialog(QDialog):
         self.session.back()
         self.refresh()
 
+    def clear_decision(self) -> None:
+        self.session.clear_decision()
+        self.refresh()
+
     def apply_pending_rename_text(self) -> None:
         """Typed-but-not-confirmed name edits are not lost when moving on."""
         path = self.session.current
@@ -378,6 +389,8 @@ class TriageReviewDialog(QDialog):
             self.go_next()
         elif key in (Qt.Key.Key_Left, Qt.Key.Key_Backspace):
             self.go_back()
+        elif key == Qt.Key.Key_U:
+            self.clear_decision()
         else:
             super().keyPressEvent(event)
 
@@ -412,6 +425,7 @@ class TriageReviewDialog(QDialog):
             b.setEnabled(has)
         self.name_edit.setEnabled(has)
         self.back_button.setEnabled(s.can_go_back())
+        self.clear_button.setEnabled(has and path in s.decisions)
         if not has:
             self.photo.set_photo(None, "All photos reviewed.")
             self.info.setText("")
