@@ -82,5 +82,77 @@ class TriageReviewDialogTests(unittest.TestCase):
         self.assertTrue(summary.execute_button.isEnabled())
 
 
+class TriageReviewDialogCompareTests(unittest.TestCase):
+    """Onion skin / blink comparison against the previously shown photo."""
+
+    def setUp(self):
+        from PyQt6.QtGui import QColor
+
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.paths = []
+        for n, color in (("a.png", (255, 0, 0)), ("b.png", (0, 255, 0)), ("c.png", (0, 0, 255))):
+            p = Path(self.tmp.name, n)
+            Image.new("RGB", (20, 10), color).save(p)
+            self.paths.append(str(p))
+        self.dlg = TriageReviewDialog(None, ops.TriageSession(self.paths), os.path.join(self.tmp.name, "fav"))
+        self._QColor = QColor
+
+    def test_no_reference_for_the_first_photo(self):
+        self.assertIsNone(self.dlg._reference_path())
+
+    def test_reference_is_the_previously_shown_photo(self):
+        d = self.dlg
+        d.next_button.click()  # a deferred, current -> b
+        self.assertEqual(d._reference_path(), self.paths[0])
+        d.next_button.click()  # b deferred, current -> c
+        self.assertEqual(d._reference_path(), self.paths[1])
+
+    def test_onion_skin_blends_the_reference_photo(self):
+        d = self.dlg
+        d.next_button.click()  # current -> b (green), reference -> a (red)
+        d.compare_panel.set_onion_checked(True)
+        d.compare_panel.opacity_slider.setValue(50)
+        pixmap = d.photo._pixmap
+        color = pixmap.toImage().pixelColor(0, 0)
+        # Roughly an even mix of green (current) and red (reference).
+        self.assertGreater(color.red(), 100)
+        self.assertGreater(color.green(), 100)
+        self.assertLess(color.blue(), 50)
+
+    def test_blink_mode_flips_between_current_and_reference(self):
+        d = self.dlg
+        d.next_button.click()  # current -> b (green), reference -> a (red)
+        d.compare_panel.set_blink_checked(True)
+        self.assertTrue(d.blink_timer.isActive())
+        d._blink_tick()
+        color = d.photo._pixmap.toImage().pixelColor(0, 0)
+        self.assertEqual(color, self._QColor(255, 0, 0))  # showing the reference
+        d._blink_tick()
+        color = d.photo._pixmap.toImage().pixelColor(0, 0)
+        self.assertEqual(color, self._QColor(0, 255, 0))  # back to the current photo
+
+    def test_onion_and_blink_are_mutually_exclusive_and_stop_the_timer(self):
+        d = self.dlg
+        d.next_button.click()
+        d.compare_panel.set_blink_checked(True)
+        self.assertTrue(d.blink_timer.isActive())
+        d.compare_panel.set_onion_checked(True)
+        self.assertFalse(d.blink_timer.isActive())
+        self.assertEqual(d.compare_mode, "onion")
+
+    def test_o_and_b_shortcuts_toggle_the_modes(self):
+        from PyQt6.QtCore import QEvent, Qt
+        from PyQt6.QtGui import QKeyEvent
+
+        d = self.dlg
+        d.show()
+        d.keyPressEvent(QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_O, Qt.KeyboardModifier.NoModifier))
+        self.assertTrue(d.compare_panel.onion_check.isChecked())
+        d.keyPressEvent(QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_B, Qt.KeyboardModifier.NoModifier))
+        self.assertTrue(d.compare_panel.blink_check.isChecked())
+        self.assertFalse(d.compare_panel.onion_check.isChecked())
+
+
 if __name__ == "__main__":
     unittest.main()

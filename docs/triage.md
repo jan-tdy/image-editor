@@ -41,6 +41,10 @@ Your last choices are remembered.
 
 Letter shortcuts are ignored while the name field has focus, so typing a new name is safe.
 
+### Comparing with the previous photo
+
+Next to the info panel, **Onion Skin** (++o++) and **Blink** (++b++) compare the current photo against whichever one was shown right before it - useful for spotting what changed between two near-identical shots. Onion Skin blends the previous photo in at an adjustable opacity; Blink flips between the two on a timer. They are mutually exclusive, and there is nothing to compare against for the very first photo.
+
 ## 3. Summary & apply
 
 ![Photo Triage summary](assets/triage-summary.png)

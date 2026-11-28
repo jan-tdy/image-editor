@@ -11,6 +11,8 @@
 | Flip horizontal / vertical | ++h++ / ++v++ |
 | Crop | ++c++ (++enter++ apply, ++esc++ cancel) |
 | Adjustments panel | ++ctrl+u++ |
+| Onion Skin | ++o++ |
+| Blink Mode | ++b++ |
 | Zoom in / out | ++ctrl+plus++ / ++ctrl+minus++ |
 | Fit to window / 100 % | ++ctrl+0++ / ++ctrl+1++ |
 | Next / previous | ++right++ / ++left++ |
@@ -37,5 +39,7 @@
 | Trash | ++t++ / ++del++ |
 | Next (decide later) | ++right++ |
 | Back | ++left++ / ++backspace++ |
+| Onion Skin | ++o++ |
+| Blink Mode | ++b++ |
 
 Letter keys are ignored while the name field has focus.

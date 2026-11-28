@@ -36,6 +36,7 @@ from PyQt6.QtWidgets import (
 from .constants import APP_NAME, APP_ORG, IMAGE_EXTENSIONS, VIDEO_EXTENSIONS
 from .core.convert import pil_to_qpixmap
 from .core.image_document import ImageDocument
+from .core.image_ops import load_with_orientation
 from .dialogs.autostack_dialog import AutoStackDialog
 from .dialogs.batch_dialog import BatchDialog
 from .workers.batch_journal import undo_journal
@@ -43,6 +44,9 @@ from .dialogs.stitch_dialog import StitchDialog
 from .dialogs.triage_dialog import run_photo_triage
 from .models.file_model import FolderNavigator
 from .widgets.adjustments_panel import AdjustmentsPanel
+from .widgets.compare_panel import NEXT as COMPARE_NEXT
+from .widgets.compare_panel import PREV as COMPARE_PREV
+from .widgets.compare_panel import ComparePanel
 from .widgets.gif_transport import GifTransportBar
 from .widgets.image_view import ImageView
 from .widgets.thumbnail_panel import ThumbnailPanel
@@ -130,6 +134,14 @@ class MainWindow(QMainWindow):
         self.gif_timer.setSingleShot(True)
         self.gif_timer.timeout.connect(self._gif_advance_frame)
         self._gif_playing = False
+
+        # Onion-skin / blink comparison against the previous/next file in
+        # the folder - see widgets/compare_panel.py.
+        self.compare_mode = "off"  # "off" | "onion" | "blink"
+        self.compare_direction = COMPARE_PREV
+        self._blink_showing_reference = False
+        self.blink_timer = QTimer(self)
+        self.blink_timer.timeout.connect(self._blink_tick)
 
         # Adjustment sliders emit valueChanged continuously while dragging,
         # each of which redoes the full-resolution PIL pass; recomputing on
@@ -247,6 +259,23 @@ class MainWindow(QMainWindow):
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.adjust_dock)
         self.adjust_dock.hide()
         self.adjust_dock.visibilityChanged.connect(self._on_adjust_dock_visibility)
+
+        self.compare_panel = ComparePanel(show_direction=True)
+        self.compare_panel.onionToggled.connect(self._on_onion_toggled)
+        self.compare_panel.opacityChanged.connect(self._on_compare_opacity_changed)
+        self.compare_panel.blinkToggled.connect(self._on_blink_toggled)
+        self.compare_panel.intervalChanged.connect(self._on_blink_interval_changed)
+        self.compare_panel.directionChanged.connect(self._on_compare_direction_changed)
+
+        self.compare_dock = QDockWidget("Compare (Onion Skin / Blink)", self)
+        self.compare_dock.setObjectName("compare_dock")
+        self.compare_dock.setWidget(self.compare_panel)
+        self.compare_dock.setFeatures(
+            QDockWidget.DockWidgetFeature.DockWidgetClosable
+            | QDockWidget.DockWidgetFeature.DockWidgetMovable
+        )
+        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.compare_dock)
+        self.compare_dock.hide()
 
     def _icon(self, standard) -> QIcon:
         return self.style().standardIcon(standard)
@@ -478,6 +507,19 @@ class MainWindow(QMainWindow):
         self.act_toggle_browser = self.browser_dock.toggleViewAction()
         self.act_toggle_browser.setText("Browser Panel")
 
+        self.act_toggle_compare = self.compare_dock.toggleViewAction()
+        self.act_toggle_compare.setText("Compare Panel (Onion Skin / Blink)")
+
+        self.act_onion_skin = QAction("Onion Skin", self, checkable=True)
+        self.act_onion_skin.setShortcut("O")
+        self.act_onion_skin.setToolTip("Overlay the previous/next file at partial opacity")
+        self.act_onion_skin.toggled.connect(self.compare_panel.set_onion_checked)
+
+        self.act_blink_mode = QAction("Blink Mode", self, checkable=True)
+        self.act_blink_mode.setShortcut("B")
+        self.act_blink_mode.setToolTip("Flip between this file and the previous/next one on a timer")
+        self.act_blink_mode.toggled.connect(self.compare_panel.set_blink_checked)
+
         self.act_slideshow = QAction("Start Slideshow", self)
         self.act_slideshow.setShortcut("F5")
         self.act_slideshow.setCheckable(True)
@@ -567,6 +609,10 @@ class MainWindow(QMainWindow):
         view_menu.addAction(self.act_fullscreen)
         view_menu.addAction(self.act_toggle_browser)
         view_menu.addSeparator()
+        view_menu.addAction(self.act_onion_skin)
+        view_menu.addAction(self.act_blink_mode)
+        view_menu.addAction(self.act_toggle_compare)
+        view_menu.addSeparator()
         slideshow_menu = view_menu.addMenu("Slideshow Interval")
         for label, seconds in SLIDESHOW_INTERVALS.items():
             action = QAction(label, self, checkable=True)
@@ -618,6 +664,8 @@ class MainWindow(QMainWindow):
         toolbar.addSeparator()
         toolbar.addAction(self.act_adjustments)
         toolbar.addAction(self.act_auto_adjust)
+        toolbar.addAction(self.act_onion_skin)
+        toolbar.addAction(self.act_blink_mode)
         toolbar.addAction(self.act_slideshow)
         toolbar.addAction(self.act_fullscreen)
         toolbar.addSeparator()
@@ -725,6 +773,9 @@ class MainWindow(QMainWindow):
             self.gif_bar.hide()
         self.refresh_view()
         self._update_status(path)
+        if self.compare_mode != "off":
+            self._refresh_compare_reference()
+        self._update_blink_timer_state()
 
     def _open_video(self, path: str) -> None:
         self.document = None
@@ -734,6 +785,7 @@ class MainWindow(QMainWindow):
         self.stack.setCurrentWidget(self.video_view)
         self.video_view.load(path)
         self._update_status(path, is_video=True)
+        self._update_blink_timer_state()
 
     def _clear_view(self) -> None:
         if self.is_video:
@@ -747,6 +799,7 @@ class MainWindow(QMainWindow):
         self.size_label.setText("")
         self.zoom_label.setText("")
         self.setWindowTitle(APP_NAME)
+        self._update_blink_timer_state()
 
     # -- animated GIF playback -------------------------------------------------
     def _start_gif_playback(self) -> None:
@@ -1150,6 +1203,82 @@ class MainWindow(QMainWindow):
             self.open_media(entry.path)
 
     # ------------------------------------------------------------------
+    # Onion skin / blink comparison
+    # ------------------------------------------------------------------
+    def _neighbor_entry(self):
+        if not self.navigator.entries:
+            return None
+        step = 1 if self.compare_direction == COMPARE_NEXT else -1
+        idx = self.navigator.index + step
+        if 0 <= idx < len(self.navigator.entries):
+            return self.navigator.entries[idx]
+        return None
+
+    def _refresh_compare_reference(self) -> None:
+        """(Re)load the neighbour image used as the onion/blink reference,
+        and reapply it to the view in whatever mode is currently active."""
+        pixmap = None
+        if not self.is_video and self.document is not None:
+            entry = self._neighbor_entry()
+            if entry is not None and not entry.is_video:
+                try:
+                    pixmap = pil_to_qpixmap(load_with_orientation(entry.path))
+                except Exception:
+                    pixmap = None
+        self.image_view.set_compare_pixmap(pixmap)
+        if self.compare_mode == "onion":
+            self.image_view.set_compare_opacity(self.compare_panel.opacity())
+            self.image_view.set_compare_visible(True)
+        elif self.compare_mode == "blink":
+            self.image_view.set_compare_opacity(1.0)
+            self.image_view.set_compare_visible(self._blink_showing_reference)
+
+    def _update_blink_timer_state(self) -> None:
+        should_run = self.compare_mode == "blink" and self.document is not None
+        if should_run and not self.blink_timer.isActive():
+            self.blink_timer.start(self.compare_panel.interval_ms())
+        elif not should_run and self.blink_timer.isActive():
+            self.blink_timer.stop()
+
+    def _blink_tick(self) -> None:
+        self._blink_showing_reference = not self._blink_showing_reference
+        self.image_view.set_compare_visible(self._blink_showing_reference)
+
+    def _on_onion_toggled(self, checked: bool) -> None:
+        self.act_onion_skin.setChecked(checked)
+        if checked:
+            self.compare_mode = "onion"
+            self._refresh_compare_reference()
+        elif self.compare_mode == "onion":
+            self.compare_mode = "off"
+            self.image_view.set_compare_visible(False)
+        self._update_blink_timer_state()
+
+    def _on_blink_toggled(self, checked: bool) -> None:
+        self.act_blink_mode.setChecked(checked)
+        if checked:
+            self.compare_mode = "blink"
+            self._blink_showing_reference = False
+            self._refresh_compare_reference()
+        elif self.compare_mode == "blink":
+            self.compare_mode = "off"
+            self.image_view.set_compare_visible(False)
+        self._update_blink_timer_state()
+
+    def _on_compare_opacity_changed(self, value: float) -> None:
+        if self.compare_mode == "onion":
+            self.image_view.set_compare_opacity(value)
+
+    def _on_blink_interval_changed(self, ms: int) -> None:
+        if self.blink_timer.isActive():
+            self.blink_timer.setInterval(ms)
+
+    def _on_compare_direction_changed(self, direction: str) -> None:
+        self.compare_direction = direction
+        if self.compare_mode != "off":
+            self._refresh_compare_reference()
+
+    # ------------------------------------------------------------------
     # Misc
     # ------------------------------------------------------------------
     def _update_actions_enabled(self) -> None:
@@ -1160,6 +1289,7 @@ class MainWindow(QMainWindow):
             self.act_rotate_left, self.act_rotate_right,
             self.act_flip_h, self.act_flip_v, self.act_crop, self.act_quad_crop,
             self.act_adjustments, self.act_auto_adjust,
+            self.act_onion_skin, self.act_blink_mode,
         ):
             action.setEnabled(has_image)
         self.act_undo.setEnabled(has_image and self.document.can_undo())
