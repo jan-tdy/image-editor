@@ -76,7 +76,7 @@ def normalize_new_name(original_path: str, typed: str) -> str | None:
     if not name or name in (".", "..") or "/" in name or "\\" in name or "\x00" in name:
         return None
     ext = Path(original_path).suffix
-    if not Path(name).suffix:
+    if Path(name).suffix.lower() != ext.lower():
         name += ext
     return name
 

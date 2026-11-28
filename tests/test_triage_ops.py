@@ -76,7 +76,7 @@ class TriageSessionTests(unittest.TestCase):
 
     def test_normalize_name(self):
         self.assertEqual(ops.normalize_new_name("/x/a.jpg", "b"), "b.jpg")
-        self.assertEqual(ops.normalize_new_name("/x/a.jpg", "b.png"), "b.png")
+        self.assertEqual(ops.normalize_new_name("/x/a.jpg", "b.png"), "b.png.jpg")
         self.assertIsNone(ops.normalize_new_name("/x/a.jpg", "  "))
         self.assertIsNone(ops.normalize_new_name("/x/a.jpg", "../b"))
 
