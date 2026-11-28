@@ -58,6 +58,17 @@ class ImageView(QGraphicsView):
         self._quad_points: dict[str, QPointF] = {}
         self._quad_drag_corner: str | None = None
 
+        # Onion-skin / blink comparison overlay. The raw reference pixmap is
+        # kept across set_pixmap() calls (which otherwise wipe the scene on
+        # every adjustment-slider tick) and only rescaled when the base
+        # image's size actually changes, so toggling onion/blink doesn't
+        # pay a rescale cost on every live-preview refresh.
+        self._compare_item: QGraphicsPixmapItem | None = None
+        self._compare_raw: QPixmap | None = None
+        self._compare_scaled: QPixmap | None = None
+        self._compare_opacity = 0.5
+        self._compare_visible = False
+
     # -- image loading --------------------------------------------------
     def set_pixmap(self, pixmap: QPixmap, recenter: bool = True) -> None:
         self._scene.clear()
@@ -66,11 +77,13 @@ class ImageView(QGraphicsView):
         self._quad_poly_item = None
         self._quad_handles.clear()
         self._quad_points.clear()
+        self._compare_item = None
         self._pixmap_item = self._scene.addPixmap(pixmap)
         # Default is FastTransformation (nearest-neighbour), which ignores the
         # view's SmoothPixmapTransform hint and looks blocky when zoomed.
         self._pixmap_item.setTransformationMode(Qt.TransformationMode.SmoothTransformation)
         self._scene.setSceneRect(QRectF(pixmap.rect()))
+        self._restore_compare_item()
         if self._fit_mode:
             self.fit_to_window()
         elif recenter:
@@ -94,11 +107,51 @@ class ImageView(QGraphicsView):
         self._quad_poly_item = None
         self._quad_handles.clear()
         self._quad_points.clear()
+        self._compare_item = None
+        self._compare_raw = None
+        self._compare_scaled = None
 
     def image_rect(self) -> QRectF:
         if self._pixmap_item is None:
             return QRectF()
         return QRectF(self._pixmap_item.pixmap().rect())
+
+    # -- onion-skin / blink comparison overlay ---------------------------
+    def set_compare_pixmap(self, pixmap: QPixmap | None) -> None:
+        """Set (or clear, with ``None``) the reference image to overlay."""
+        self._compare_raw = pixmap if pixmap is not None and not pixmap.isNull() else None
+        self._compare_scaled = None
+        self._restore_compare_item()
+
+    def set_compare_opacity(self, opacity: float) -> None:
+        self._compare_opacity = max(0.0, min(1.0, opacity))
+        if self._compare_item is not None:
+            self._compare_item.setOpacity(self._compare_opacity)
+
+    def set_compare_visible(self, visible: bool) -> None:
+        self._compare_visible = visible
+        if self._compare_item is not None:
+            self._compare_item.setVisible(visible)
+
+    def has_compare_pixmap(self) -> bool:
+        return self._compare_raw is not None
+
+    def _restore_compare_item(self) -> None:
+        """(Re)create the overlay item after set_pixmap()'s scene.clear(),
+        reusing the cached scaled pixmap unless the base image's size
+        changed (e.g. after a crop)."""
+        if self._compare_raw is None or self._pixmap_item is None:
+            return
+        target = self._pixmap_item.pixmap().size()
+        if self._compare_scaled is None or self._compare_scaled.size() != target:
+            self._compare_scaled = self._compare_raw.scaled(
+                target, Qt.AspectRatioMode.IgnoreAspectRatio, Qt.TransformationMode.SmoothTransformation
+            )
+        self._compare_item = self._scene.addPixmap(self._compare_scaled)
+        self._compare_item.setTransformationMode(Qt.TransformationMode.SmoothTransformation)
+        self._compare_item.setZValue(5)
+        self._compare_item.setOpacity(self._compare_opacity)
+        self._compare_item.setVisible(self._compare_visible)
 
     # -- zoom -------------------------------------------------------------
     def fit_to_window(self) -> None:

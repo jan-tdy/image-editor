@@ -11,6 +11,17 @@ The main window has a **Browser** panel (thumbnails of the current folder, loade
 - EXIF orientation is respected on load.
 - Video: play/pause, seek and volume via Qt Multimedia.
 
+## Comparing with a neighbouring photo
+
+The **Compare** dock (View menu) overlays the previous or next file in the folder on top of the current one, to spot what changed between two shots - handy for burst sequences or spotting what moved between two astro frames.
+
+| Tool | Shortcut | Notes |
+|---|---|---|
+| Onion Skin | ++o++ | Shows the neighbour at an adjustable opacity, blended over the current photo. |
+| Blink Mode | ++b++ | Flips between the current and neighbouring photo on a timer (the classic astronomical "blink comparator"). Interval is configurable. |
+
+Onion Skin and Blink are mutually exclusive; the dock also has a **Compare to: Previous / Next** choice. The neighbour must be a plain image (videos are skipped).
+
 ## Editing
 
 | Tool | Notes |

@@ -180,6 +180,7 @@ class MainWindowRegressionTests(unittest.TestCase):
             size_label=Mock(),
             zoom_label=Mock(),
             setWindowTitle=Mock(),
+            _update_blink_timer_state=Mock(),
         )
         MainWindow._clear_view(window)
         video_view.stop_and_release.assert_called_once_with()

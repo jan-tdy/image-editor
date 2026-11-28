@@ -6,8 +6,8 @@ import html
 import os
 from datetime import datetime
 
-from PyQt6.QtCore import QSettings, Qt
-from PyQt6.QtGui import QKeyEvent, QPixmap
+from PyQt6.QtCore import QSettings, Qt, QTimer
+from PyQt6.QtGui import QKeyEvent, QPainter, QPixmap
 from PyQt6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -32,6 +32,7 @@ from ..constants import APP_NAME, APP_ORG
 from ..core import triage_ops as ops
 from ..core.convert import pil_to_qpixmap
 from ..core.image_ops import load_with_orientation
+from ..widgets.compare_panel import ComparePanel
 
 try:
     from send2trash import send2trash
@@ -239,6 +240,13 @@ class TriageReviewDialog(QDialog):
         self.executed: ops.ExecuteResult | None = None
         self._cache: dict[str, QPixmap] = {}
 
+        # Onion-skin / blink comparison against the previously reviewed
+        # photo - see widgets/compare_panel.py.
+        self.compare_mode = "off"  # "off" | "onion" | "blink"
+        self._blink_showing_reference = False
+        self.blink_timer = QTimer(self)
+        self.blink_timer.timeout.connect(self._blink_tick)
+
         # top: rename
         self.name_edit = QLineEdit()
         self.name_edit.returnPressed.connect(self.apply_rename)
@@ -258,9 +266,25 @@ class TriageReviewDialog(QDialog):
         self.info.setAlignment(Qt.AlignmentFlag.AlignTop)
         self.info.setMinimumWidth(230)
         self.info.setMaximumWidth(280)
+
+        self.compare_panel = ComparePanel(show_direction=False)
+        self.compare_panel.onionToggled.connect(self._on_onion_toggled)
+        self.compare_panel.opacityChanged.connect(lambda _v: self._update_photo_display())
+        self.compare_panel.blinkToggled.connect(self._on_blink_toggled)
+        self.compare_panel.intervalChanged.connect(self._on_blink_interval_changed)
+
+        side = QVBoxLayout()
+        side.addWidget(self.info)
+        side.addWidget(self.compare_panel)
+        side.addStretch(1)
+        side_widget = QWidget()
+        side_widget.setLayout(side)
+        side_widget.setMinimumWidth(230)
+        side_widget.setMaximumWidth(280)
+
         centre = QHBoxLayout()
         centre.addWidget(self.photo, 1)
-        centre.addWidget(self.info)
+        centre.addWidget(side_widget)
 
         # bottom: back | keep favourite trash | next
         self.back_button = QPushButton("◀  Back")
@@ -391,6 +415,10 @@ class TriageReviewDialog(QDialog):
             self.go_back()
         elif key == Qt.Key.Key_U:
             self.clear_decision()
+        elif key == Qt.Key.Key_O:
+            self.compare_panel.set_onion_checked(not self.compare_panel.onion_check.isChecked())
+        elif key == Qt.Key.Key_B:
+            self.compare_panel.set_blink_checked(not self.compare_panel.blink_check.isChecked())
         else:
             super().keyPressEvent(event)
 
@@ -403,6 +431,74 @@ class TriageReviewDialog(QDialog):
             if answer != QMessageBox.StandardButton.Yes:
                 return
         super().reject()
+
+    # -- onion-skin / blink comparison ----------------------------------
+    def _reference_path(self) -> str | None:
+        """The previously reviewed photo - the last one shown before the
+        current one, in display order (including deferred "Next" steps)."""
+        hist = self.session.history
+        return hist[-1] if hist else None
+
+    def _composed_photo(self, base: QPixmap) -> QPixmap:
+        if self.compare_mode == "off":
+            return base
+        ref_path = self._reference_path()
+        ref_pixmap = self._pixmap_for(ref_path) if ref_path else None
+        if ref_pixmap is None:
+            return base
+        scaled_ref = ref_pixmap.scaled(
+            base.size(), Qt.AspectRatioMode.IgnoreAspectRatio, Qt.TransformationMode.SmoothTransformation
+        )
+        if self.compare_mode == "blink":
+            return scaled_ref if self._blink_showing_reference else base
+        result = QPixmap(base.size())
+        result.fill(Qt.GlobalColor.transparent)
+        painter = QPainter(result)
+        painter.drawPixmap(0, 0, base)
+        painter.setOpacity(self.compare_panel.opacity())
+        painter.drawPixmap(0, 0, scaled_ref)
+        painter.end()
+        return result
+
+    def _update_photo_display(self) -> None:
+        path = self.session.current
+        pix = self._pixmap_for(path) if path else None
+        if pix is None:
+            self.photo.set_photo(None, "All photos reviewed." if path is None else "Could not load this image.")
+        else:
+            self.photo.set_photo(self._composed_photo(pix))
+
+    def _sync_blink_timer(self) -> None:
+        should_run = self.compare_mode == "blink" and self.session.current is not None
+        if should_run and not self.blink_timer.isActive():
+            self.blink_timer.start(self.compare_panel.interval_ms())
+        elif not should_run and self.blink_timer.isActive():
+            self.blink_timer.stop()
+
+    def _blink_tick(self) -> None:
+        self._blink_showing_reference = not self._blink_showing_reference
+        self._update_photo_display()
+
+    def _on_onion_toggled(self, checked: bool) -> None:
+        if checked:
+            self.compare_mode = "onion"
+        elif self.compare_mode == "onion":
+            self.compare_mode = "off"
+        self._sync_blink_timer()
+        self._update_photo_display()
+
+    def _on_blink_toggled(self, checked: bool) -> None:
+        if checked:
+            self.compare_mode = "blink"
+            self._blink_showing_reference = False
+        elif self.compare_mode == "blink":
+            self.compare_mode = "off"
+        self._sync_blink_timer()
+        self._update_photo_display()
+
+    def _on_blink_interval_changed(self, ms: int) -> None:
+        if self.blink_timer.isActive():
+            self.blink_timer.setInterval(ms)
 
     # -- display -------------------------------------------------------
     def _pixmap_for(self, path: str) -> QPixmap | None:
@@ -426,15 +522,15 @@ class TriageReviewDialog(QDialog):
         self.name_edit.setEnabled(has)
         self.back_button.setEnabled(s.can_go_back())
         self.clear_button.setEnabled(has and path in s.decisions)
+        self._sync_blink_timer()
         if not has:
-            self.photo.set_photo(None, "All photos reviewed.")
+            self._update_photo_display()
             self.info.setText("")
             self.name_edit.setText("")
             return
         self.name_edit.setText(s.display_name(path))
         self.name_edit.setModified(False)
-        pix = self._pixmap_for(path)
-        self.photo.set_photo(pix, "" if pix else "Could not load this image.")
+        self._update_photo_display()
         self.info.setText(self._info_html(path))
         # Keep keyboard shortcuts (K/F/T/arrows) working after each photo.
         self.photo.setFocus()
